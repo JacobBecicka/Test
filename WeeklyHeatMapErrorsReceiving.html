@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fiscal Week Error Frequency Heat Map · Receiving</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    body { margin: 0; padding: 0; }
+    #root { min-height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useRef, useCallback, useMemo, useEffect } = React;
+
+    const REPO_RAW = 'https://raw.githubusercontent.com/JacobBecicka/Receiving_Error_Dashboard/main';
+    const WORKBOOK  = 'AI_Safe_Weekly_Error_Data.xlsx';
+
+    const SHIFTS = [
+      { key:"a", label:"A-Shift", accent:"#38bdf8", glow:"rgba(56,189,248,.18)",  border:"rgba(56,189,248,.4)" },
+      { key:"b", label:"B-Shift", accent:"#a78bfa", glow:"rgba(167,139,250,.18)", border:"rgba(167,139,250,.4)" },
+      { key:"c", label:"C-Shift", accent:"#34d399", glow:"rgba(52,211,153,.18)",  border:"rgba(52,211,153,.4)" },
+    ];
+
+    // Sheets are named directly with their fiscal week, e.g. "FW6 26",
+    // "FW48 25" — the sheet name IS the fiscal week/year, so there's no
+    // anchor-detection or calendar-week-offset math needed anymore.
+    const FW_SHEET_RE = /^FW\s*(\d+)\s+(\d+)$/i;
+
+    // ── DEBUG CATCHER ──────────────────────────────────────────────
+    // Toggle with the "DEBUG" button in the control bar, or append
+    // ?debug=1 to the URL. Logs parsing decisions so a bad workbook
+    // produces a visible reason, not a blank table.
+    const urlDebug = new URLSearchParams(window.location.search).get('debug') === '1';
+    function useDebugLog() {
+      const [logs, setLogs] = useState([]);
+      const push = useCallback((level, msg) => {
+        setLogs(l => [...l, { level, msg, t: new Date().toLocaleTimeString() }].slice(-200));
+        if (level === 'error') console.error('[HeatMap]', msg);
+        else console.log('[HeatMap]', msg);
+      }, []);
+      return [logs, push];
+    }
+
+    function makeTk(dark) {
+      return {
+        bg:            dark ? "#0f172a"                        : "#f0f4f8",
+        bgGrad:        dark ? "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(56,189,248,.15), transparent)"
+                            : "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(56,189,248,.12), transparent)",
+        surface:       dark ? "#1e293b"                        : "#ffffff",
+        border:        dark ? "#334155"                        : "#e2e8f0",
+        borderMuted:   dark ? "#475569"                        : "#94a3b8",
+        text:          dark ? "#e2e8f0"                        : "#1e293b",
+        textH:         dark ? "#f8fafc"                        : "#0f172a",
+        textMuted:     dark ? "#94a3b8"                        : "#64748b",
+        textFaint:     dark ? "#475569"                        : "#94a3b8",
+        textNav:       dark ? "#94a3b8"                        : "#1e3a5f",
+        tabBg:         dark ? "rgba(15,23,42,.9)"              : "rgba(226,232,240,.8)",
+        sticky:        dark ? "#0f172a"                        : "#f0f4f8",
+        tooltipBg:     dark ? "#1e293b"                        : "#ffffff",
+        tooltipBorder: dark ? "#334155"                        : "#1e3a5f",
+        dropBg:        dark ? "rgba(30,41,59,.7)"              : "rgba(255,255,255,.7)",
+        dropBorder:    dark ? "#475569"                        : "#94a3b8",
+        receivingColor:dark ? "#94a3b8"                        : "#334155",
+        scrollTrack:   dark ? "#1e293b"                        : "#dde3ea",
+        moSep:         dark ? "rgba(100,116,139,.5)"           : "rgba(100,116,139,.35)",
+        debugBg:       dark ? "#0b1220"                        : "#0f172a",
+        // Shadow token — matches Weekly/Monthly/YTD reports' button shadow
+        shadow:        dark ? "0 2px 14px rgba(0,0,0,.35)"     : "0 2px 12px rgba(0,0,0,.07)",
+      };
+    }
+
+    // ── Parse "M/D - M/D" range strings ──
+    function parseRange(rangeStr) {
+      const m = String(rangeStr || "").match(/(\d+)\s*\/\s*(\d+)\s*-\s*(\d+)\s*\/\s*(\d+)/);
+      if (!m) return null;
+      return {
+        startMonth: parseInt(m[1], 10), startDay: parseInt(m[2], 10),
+        endMonth:   parseInt(m[3], 10), endDay:   parseInt(m[4], 10),
+      };
+    }
+
+    function fwLabel(fw) { return `FW${fw.fw} '${fw.yy}`; }
+
+    function parseWorkbook(wb, log) {
+      const result      = { a:{}, b:{}, c:{} };
+      const ranges      = {};
+      const trainingWMs = new Set();
+      const sheetMeta    = []; // {sheet, fw, yy}
+
+      for (const sheet of wb.SheetNames) {
+        const m = sheet.match(FW_SHEET_RE);
+        if (!m) continue;
+        sheetMeta.push({ sheet, fw: parseInt(m[1], 10), yy: parseInt(m[2], 10) });
+
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheet], { header:1, defval:"" });
+        ranges[sheet] = String(rows[1]?.[1] || "").trim();
+        for (let i = 5; i < rows.length; i++) {
+          const row = rows[i];
+          if (!row || !row[6]) continue;
+          const shift = String(row[9]  || "").replace(/\xa0/g,"").trim().toLowerCase();
+          const dept  = String(row[10] || "").replace(/\xa0/g,"").trim().toLowerCase();
+          const isReceiving = dept.includes("receiv");
+          const isTraining  = dept.includes("train");
+          if (!isReceiving && !isTraining) continue;
+          const sk = shift.startsWith("a")?"a":shift.startsWith("b")?"b":shift.startsWith("c")?"c":null;
+          if (!sk) { log && log('warn', `${sheet} row ${i+1}: unrecognized shift "${row[9]}" — skipped`); continue; }
+          const wm = String(row[6]).trim();
+          if (!wm) continue;
+          if (isTraining) trainingWMs.add(wm);
+          if (!result[sk][wm]) result[sk][wm] = {};
+          result[sk][wm][sheet] = (result[sk][wm][sheet] || 0) + 1;
+        }
+      }
+
+      // Chronological order: fiscal year first, then fiscal week number
+      // within that year. No anchor detection needed — the sheet name
+      // already tells us exactly where each week sits.
+      sheetMeta.sort((a,b) => (a.yy - b.yy) || (a.fw - b.fw));
+
+      if (!sheetMeta.length) {
+        log && log('error', 'No sheets matched the "FW<n> <yy>" naming pattern — check sheet names in the workbook.');
+      } else {
+        log && log('info', `Parsed ${sheetMeta.length} fiscal weeks: ${sheetMeta[0].sheet} → ${sheetMeta[sheetMeta.length-1].sheet}`);
+      }
+
+      const fiscalWeeks = sheetMeta.map(({ sheet, fw, yy }) => ({
+        fw, yy, sheet,
+        range: ranges[sheet] || "",
+      }));
+
+      return { counts: result, ranges, trainingWMs, fiscalWeeks };
+    }
+
+    function hexToRgb(h) {
+      return [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+    }
+    function lerp(c1, c2, t) {
+      const [r1,g1,b1]=hexToRgb(c1),[r2,g2,b2]=hexToRgb(c2);
+      return `rgb(${Math.round(r1+(r2-r1)*t)},${Math.round(g1+(g2-g1)*t)},${Math.round(b1+(b2-b1)*t)})`;
+    }
+    function heatBg(val, max) {
+      if (!val) return "rgba(203,213,225,.35)";
+      const t = Math.min(val/max,1);
+      if (t<0.35) return lerp("#fef08a","#fb923c",t/0.35);
+      if (t<0.7)  return lerp("#fb923c","#ef4444",(t-0.35)/0.35);
+      return lerp("#ef4444","#7f1d1d",(t-0.7)/0.3);
+    }
+    function heatFg(val, max) {
+      if (!val) return "#94a3b8";
+      return val/max > 0.4 ? "#fff" : "#1a2535";
+    }
+    function computeTrend(wmData, fiscalWeeks) {
+      const pts = fiscalWeeks.map((fw,i)=>[i, wmData[fw.sheet]||0]).filter(([,v])=>v>0);
+      if (pts.length<2) return 0;
+      const n=pts.length, sx=pts.reduce((s,[x])=>s+x,0), sy=pts.reduce((s,[,y])=>s+y,0);
+      const sxy=pts.reduce((s,[x,y])=>s+x*y,0), sx2=pts.reduce((s,[x])=>s+x*x,0);
+      const denom=n*sx2-sx*sx;
+      return denom ? (n*sxy-sx*sy)/denom : 0;
+    }
+
+    function TrendArrow({ slope }) {
+      if (Math.abs(slope)<0.04) return <span style={{color:"#334155",fontSize:".7rem",fontWeight:700}} title="Stable">→</span>;
+      if (slope>0) return <span style={{color:"#ef4444",fontSize:".75rem",fontWeight:800}} title={`Worsening (+${slope.toFixed(2)})`}>▲</span>;
+      return <span style={{color:"#22c55e",fontSize:".75rem",fontWeight:800}} title={`Improving (${slope.toFixed(2)})`}>▼</span>;
+    }
+
+    function App() {
+      const [data,     setData]     = useState(null);
+      const [shift,    setShift]    = useState("a");
+      const [tooltip,  setTooltip]  = useState(null);
+      const [dragging, setDragging] = useState(false);
+      const [viewMode, setViewMode] = useState("raw");
+      const [dark,     setDark]     = useState(false);
+      const [loading,  setLoading]  = useState(true);
+      const [loadErr,  setLoadErr]  = useState(null);
+      const [showDebug, setShowDebug] = useState(urlDebug);
+      const [logs, log] = useDebugLog();
+      const inputRef = useRef();
+      const tk = makeTk(dark);
+
+      // ── Auto-fetch workbook from GitHub on mount ──
+      useEffect(() => {
+        async function autoLoad() {
+          try {
+            log('info', `Fetching ${REPO_RAW}/${WORKBOOK}`);
+            const resp = await fetch(`${REPO_RAW}/${WORKBOOK}`);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const buf = await resp.arrayBuffer();
+            const wb = XLSX.read(new Uint8Array(buf), { type:"array" });
+            const parsed = parseWorkbook(wb, log);
+            if (!parsed.fiscalWeeks.length) {
+              setLoadErr('No fiscal week sheets found — see debug log.');
+              setShowDebug(true);
+            }
+            setData({ ...parsed, fileName: WORKBOOK });
+          } catch(e) {
+            log('error', e.message);
+            setLoadErr(e.message);
+          } finally {
+            setLoading(false);
+          }
+        }
+        autoLoad();
+      }, []);
+
+      const load = useCallback(file => {
+        if (!file?.name.endsWith(".xlsx")) return;
+        const reader = new FileReader();
+        reader.onload = e => {
+          try {
+            const wb = XLSX.read(new Uint8Array(e.target.result), { type:"array" });
+            const parsed = parseWorkbook(wb, log);
+            if (!parsed.fiscalWeeks.length) {
+              setLoadErr('No fiscal week sheets found — see debug log.');
+              setShowDebug(true);
+            } else {
+              setLoadErr(null);
+            }
+            setData({ ...parsed, fileName:file.name });
+          } catch (err) {
+            log('error', `Failed to parse ${file.name}: ${err.message}`);
+            setLoadErr(err.message);
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      }, []);
+
+      const onDrop = e => { e.preventDefault(); setDragging(false); load(e.dataTransfer.files[0]); };
+
+      const FW = data?.fiscalWeeks ?? [];
+      const shiftCounts = data?.counts[shift] ?? {};
+
+      const maxVal = useMemo(() =>
+        Math.max(...Object.values(shiftCounts).flatMap(m=>Object.values(m)),1), [shiftCounts]);
+
+      // Totals/trends only count fiscal weeks (pre-FW1 weeks are excluded entirely)
+      const wmTotals = useMemo(() =>
+        Object.fromEntries(Object.keys(shiftCounts).map(wm => [
+          wm, FW.reduce((s,fw)=>s+(shiftCounts[wm]?.[fw.sheet]||0),0)
+        ])), [shiftCounts, FW]);
+
+      const wmTrends = useMemo(() =>
+        Object.fromEntries(Object.keys(shiftCounts).map(wm=>[wm, computeTrend(shiftCounts[wm], FW)])), [shiftCounts, FW]);
+
+      const sortedWMs = useMemo(() =>
+        Object.keys(wmTotals).filter(wm=>wmTotals[wm]>0).sort((a,b)=>wmTotals[b]-wmTotals[a]), [wmTotals]);
+
+      const grandTotal = Object.values(wmTotals).reduce((a,b)=>a+b,0);
+      const avg = sortedWMs.length ? grandTotal/sortedWMs.length : 0;
+
+      const weeksWithData = useMemo(() =>
+        FW.filter(fw=>sortedWMs.some(wm=>shiftCounts[wm]?.[fw.sheet]>0)), [sortedWMs,shiftCounts,FW]);
+
+      // Month separators: draw a line whenever the calendar month (from the
+      // range's start date) changes from the previous fiscal week.
+      const monthBreaks = useMemo(() => {
+        const set = new Set();
+        let prevMonth = null;
+        FW.forEach((fw,i) => {
+          const p = parseRange(fw.range);
+          const m = p ? p.startMonth : null;
+          if (prevMonth !== null && m !== null && m !== prevMonth) set.add(i);
+          if (m !== null) prevMonth = m;
+        });
+        return set;
+      }, [FW]);
+
+      // Fiscal-year separators: draw a line whenever the fiscal year
+      // (from the sheet name itself, e.g. "FW1 26") changes.
+      const yearBreaks = useMemo(() => {
+        const set = new Set();
+        let prevYY = null;
+        FW.forEach((fw,i) => {
+          if (prevYY !== null && fw.yy !== prevYY) set.add(i);
+          prevYY = fw.yy;
+        });
+        return set;
+      }, [FW]);
+
+      const shiftTotals = useMemo(() =>
+        data ? Object.fromEntries(SHIFTS.map(s=>[s.key,
+          FW.reduce((sum,fw)=>sum+Object.values(data.counts[s.key]).reduce((a,wm)=>a+(wm[fw.sheet]||0),0),0)
+        ])) : {}, [data, FW]);
+
+      const activeShift = SHIFTS.find(s=>s.key===shift);
+
+      function getDelta(wm, idx) {
+        if (idx===0) return null;
+        const curr=shiftCounts[wm]?.[FW[idx].sheet]||0, prev=shiftCounts[wm]?.[FW[idx-1].sheet]||0;
+        if (curr===0 && prev===0) return null;
+        return curr-prev;
+      }
+
+      const allDeltas = useMemo(() =>
+        sortedWMs.flatMap(wm=>FW.map((_,i)=>getDelta(wm,i)).filter(d=>d!==null)),
+        [sortedWMs,shiftCounts,viewMode,FW]);
+      const maxAbsDelta = Math.max(...allDeltas.map(Math.abs),1);
+
+      function deltaBg(d) {
+        if (d===null) return "transparent";
+        if (d===0)    return "rgba(148,163,184,.3)";
+        const t=Math.min(Math.abs(d)/maxAbsDelta,1);
+        return d>0?lerp("#fecaca","#dc2626",t):lerp("#bbf7d0","#16a34a",t);
+      }
+      function deltaFg(d) { if (d===null||d===0) return "#94a3b8"; return "#fff"; }
+
+      return (
+        <div style={{ minHeight:"100vh", background:tk.bg, backgroundImage:tk.bgGrad,
+          fontFamily:"'DM Mono','Courier New',monospace", color:tk.text,
+          padding:"1.75rem 2rem 3rem", boxSizing:"border-box", transition:"background .3s,color .3s" }}>
+          <style>{`
+            @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@400;600;700;800&display=swap');
+            *{box-sizing:border-box;margin:0;padding:0}
+            ::-webkit-scrollbar{height:4px;width:4px}
+            ::-webkit-scrollbar-track{background:${tk.scrollTrack}}
+            ::-webkit-scrollbar-thumb{background:#94a3b8;border-radius:2px}
+            .drop-zone{border:1.5px dashed ${tk.dropBorder};border-radius:16px;
+              padding:3rem 3rem;text-align:center;cursor:pointer;transition:all .3s;background:${tk.dropBg}}
+            .drop-zone:hover,.drop-zone.active{border-color:rgba(56,189,248,.5);background:rgba(56,189,248,.08)}
+            .wk-cell{transition:transform .1s;cursor:default;border-radius:3px}
+            .wk-cell:hover{transform:scale(1.35);z-index:40;position:relative;box-shadow:0 0 10px rgba(251,146,60,.5)}
+            tr:hover .wk-cell{opacity:.75}
+            tr:hover .wk-cell:hover{opacity:1}
+            .shift-tab{padding:.4rem 1.1rem;border-radius:8px;cursor:pointer;
+              font-family:'DM Mono',monospace;font-size:.72rem;font-weight:500;
+              letter-spacing:.05em;border:1px solid transparent;background:transparent;
+              color:${tk.textMuted};transition:all .2s}
+            .shift-tab:hover{color:${tk.text}}
+            .view-btn{padding:.22rem .7rem;border-radius:5px;cursor:pointer;
+              font-family:'DM Mono',monospace;font-size:.62rem;font-weight:500;
+              letter-spacing:.06em;border:1px solid transparent;background:transparent;
+              color:${tk.textMuted};transition:all .2s}
+            .view-btn.on{background:${tk.surface};border-color:${tk.borderMuted};color:${tk.text}}
+            /* Uniform header buttons — Hub / Print / Theme / Debug —
+               matches Weekly, Monthly, and YTD report button styling */
+            .hdr-btn{display:flex;align-items:center;gap:6px;background:${tk.surface};
+              border:1px solid ${tk.borderMuted};border-radius:20px;padding:7px 14px;
+              cursor:pointer;font-size:12px;font-weight:700;color:${tk.text};
+              box-shadow:${tk.shadow};text-decoration:none;white-space:nowrap;
+              font-family:'DM Sans',sans-serif;transition:opacity .15s}
+            .hdr-btn:hover{opacity:.82}
+            .sticky-wm{position:sticky;left:0;z-index:10;padding-right:.75rem;background:${tk.sticky}}
+            .sticky-th{position:sticky;left:0;z-index:11;background:${tk.sticky}}
+            .mo-sep{border-left:1px solid ${tk.moSep}}
+            @keyframes spin{to{transform:rotate(360deg)}}
+            @media print {
+              .no-print{display:none !important}
+              body{background:#fff !important}
+            }
+          `}</style>
+
+          {/* Header */}
+          <div style={{ marginBottom:"1.75rem", display:"flex", alignItems:"flex-end",
+            justifyContent:"space-between", flexWrap:"wrap", gap:"1rem" }}>
+            <div>
+              <p style={{ fontSize:".6rem", letterSpacing:".2em", color:tk.textMuted,
+                fontFamily:"DM Sans,sans-serif", marginBottom:".3rem" }}>
+                RECEIVING · TRAINING · FISCAL WEEKLY
+              </p>
+              <h1 style={{ fontSize:"1.7rem", fontWeight:800, color:tk.textH,
+                fontFamily:"DM Sans,sans-serif", letterSpacing:"-.03em", lineHeight:1 }}>
+                Error Frequency Heat Map
+              </h1>
+            </div>
+            <div className="no-print" style={{ display:"flex", alignItems:"center", gap:"0.6rem", flexWrap:"wrap" }}>
+              {data && (
+                <p style={{ fontSize:".6rem", color:tk.textMuted, textAlign:"right", marginRight:".5rem" }}>
+                  {data.fileName}<br/>
+                  <span style={{ color:tk.textFaint }}>
+                    data thru {weeksWithData.length ? fwLabel(weeksWithData[weeksWithData.length-1]) : "—"}
+                    {weeksWithData[weeksWithData.length-1]?.range
+                      ?` (${weeksWithData[weeksWithData.length-1].range})` :""}
+                  </span>
+                </p>
+              )}
+              <button className="hdr-btn" onClick={()=>setShowDebug(d=>!d)}
+                style={showDebug?{color:"#f59e0b",borderColor:"#f59e0b"}:{}}>
+                DEBUG {logs.some(l=>l.level==='error') ? '⚠' : ''}
+              </button>
+              <button className="hdr-btn" onClick={()=>window.print()}>🖨️ Print / Save PDF</button>
+              <a className="hdr-btn" href="index.html">← Hub</a>
+              <button className="hdr-btn" onClick={()=>setDark(d=>!d)}>{dark?'☀️ Light':'🌙 Dark'}</button>
+            </div>
+          </div>
+
+          {/* ── Debug panel ── */}
+          {showDebug && (
+            <div className="no-print" style={{ marginBottom:"1.25rem", background:tk.debugBg, color:"#94e2ff",
+              borderRadius:10, padding:".75rem 1rem", fontSize:".65rem", maxHeight:180, overflowY:"auto",
+              border:"1px solid #1e3a5f" }}>
+              <div style={{ color:"#f8fafc", fontWeight:700, marginBottom:".4rem" }}>DEBUG LOG</div>
+              {logs.length===0 && <div style={{opacity:.5}}>No events yet.</div>}
+              {logs.map((l,i)=>(
+                <div key={i} style={{ color: l.level==='error'?'#f87171':l.level==='warn'?'#fbbf24':'#94e2ff' }}>
+                  [{l.t}] {l.level.toUpperCase()}: {l.msg}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── Loading state ── */}
+          {loading ? (
+            <div style={{ display:"flex", flexDirection:"column", alignItems:"center",
+              justifyContent:"center", minHeight:"60vh", gap:"1.25rem" }}>
+              <div style={{ width:44, height:44, borderRadius:"50%",
+                border:`3px solid ${tk.border}`, borderTopColor:"#38bdf8",
+                animation:"spin .8s linear infinite" }} />
+              <p style={{ fontFamily:"DM Sans,sans-serif", color:tk.textMuted, fontSize:".85rem" }}>
+                Loading workbook from GitHub…
+              </p>
+            </div>
+
+          ) : !data || !FW.length ? (
+            /* ── Error / manual fallback ── */
+            <div style={{ maxWidth:480, margin:"4rem auto", textAlign:"center" }}>
+              {loadErr && (
+                <div style={{ marginBottom:"1.5rem", padding:".75rem 1.25rem",
+                  background:"rgba(239,68,68,.08)", border:"1px solid rgba(239,68,68,.3)",
+                  borderRadius:10, color:"#f87171", fontSize:".75rem",
+                  fontFamily:"DM Sans,sans-serif", lineHeight:1.5 }}>
+                  ⚠ {loadErr}<br/>
+                  <span style={{ opacity:.7 }}>Check the DEBUG panel above, or upload the workbook manually below.</span>
+                </div>
+              )}
+              <div className={`drop-zone${dragging?" active":""}`}
+                onDragOver={e=>{e.preventDefault();setDragging(true);}}
+                onDragLeave={()=>setDragging(false)}
+                onDrop={onDrop}
+                onClick={()=>inputRef.current.click()}>
+                <div style={{ fontSize:"2rem", marginBottom:"1rem", opacity:.4 }}>⬆</div>
+                <p style={{ fontFamily:"DM Sans,sans-serif", color:tk.textMuted, marginBottom:".4rem" }}>
+                  Upload workbook manually
+                </p>
+                <p style={{ fontSize:".65rem", color:tk.textFaint }}>click to browse · .xlsx only</p>
+                <input ref={inputRef} type="file" accept=".xlsx" style={{ display:"none" }}
+                  onChange={e=>load(e.target.files[0])} />
+              </div>
+            </div>
+
+          ) : (
+            <>
+              {/* Control bar */}
+              <div className="no-print" style={{ display:"flex", alignItems:"center", gap:".75rem", marginBottom:"1.25rem", flexWrap:"wrap" }}>
+                <button onClick={()=>setData(null)} style={{
+                  background:"transparent", border:`1px solid ${tk.borderMuted}`, color:tk.textMuted,
+                  padding:".3rem .8rem", borderRadius:6, cursor:"pointer",
+                  fontFamily:"DM Mono,monospace", fontSize:".65rem", letterSpacing:".05em", transition:"all .2s"
+                }}
+                  onMouseOver={e=>e.currentTarget.style.color="#f59e0b"}
+                  onMouseOut={e=>e.currentTarget.style.color=tk.textMuted}>
+                  ↑ NEW FILE
+                </button>
+
+                <div style={{ display:"flex", gap:".25rem", background:tk.tabBg, borderRadius:10, padding:".25rem" }}>
+                  {SHIFTS.map(s => {
+                    const on = shift===s.key;
+                    return (
+                      <button key={s.key} className="shift-tab" onClick={()=>setShift(s.key)}
+                        style={on?{background:s.glow,color:s.accent,borderColor:s.border,border:"1px solid"}:{}}>
+                        {s.label}
+                        <span style={{ marginLeft:".4rem", fontSize:".58rem", color:on?s.accent:tk.textNav, fontWeight:400 }}>
+                          {shiftTotals[s.key]}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div style={{ display:"flex", background:tk.tabBg, borderRadius:7, padding:".2rem", gap:".15rem" }}>
+                  {[["raw","RAW"],["delta","DELTA"]].map(([m,l])=>(
+                    <button key={m} className={`view-btn${viewMode===m?" on":""}`} onClick={()=>setViewMode(m)}>{l}</button>
+                  ))}
+                </div>
+
+                <div style={{ marginLeft:"auto", display:"flex", gap:"1.5rem" }}>
+                  {[
+                    {l:"ASSOCIATES",v:sortedWMs.length},
+                    {l:"TOTAL",     v:grandTotal},
+                    {l:"AVG",       v:avg.toFixed(1)},
+                  ].map(s=>(
+                    <div key={s.l} style={{ textAlign:"right" }}>
+                      <div style={{ fontSize:".52rem", color:tk.textMuted, letterSpacing:".1em" }}>{s.l}</div>
+                      <div style={{ fontSize:"1rem", fontWeight:700, color:activeShift.accent, fontFamily:"DM Sans,sans-serif" }}>{s.v}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Legend */}
+              <div className="no-print" style={{ display:"flex", alignItems:"center", gap:".5rem", marginBottom:"1rem", flexWrap:"wrap" }}>
+                {viewMode==="raw" ? (
+                  <>
+                    <span style={{ fontSize:".55rem", color:tk.textMuted, letterSpacing:".08em" }}>NONE</span>
+                    {[0,.2,.45,.7,1].map((t,i)=>(
+                      <div key={i} style={{ width:13, height:13, borderRadius:2,
+                        background:t===0?"rgba(203,213,225,.35)":heatBg(Math.max(1,Math.round(t*maxVal)),maxVal) }} />
+                    ))}
+                    <span style={{ fontSize:".55rem", color:tk.textNav, letterSpacing:".08em" }}>PEAK ({maxVal})</span>
+                  </>
+                ) : (
+                  <>
+                    {[
+                      {bg:lerp("#052e16","#16a34a",.7),l:"IMPROVING"},
+                      {bg:"rgba(51,65,85,.4)",          l:"FLAT"},
+                      {bg:lerp("#450a0a","#dc2626",.7), l:"WORSENING"},
+                      {bg:"transparent",                l:"NO DATA",border:"1px solid "+tk.border},
+                    ].map(({bg,l,border})=>(
+                      <div key={l} style={{ display:"flex", alignItems:"center", gap:".3rem" }}>
+                        <div style={{ width:13, height:13, borderRadius:2, background:bg, border:border||"none" }} />
+                        <span style={{ fontSize:".52rem", color:tk.textMuted, letterSpacing:".07em" }}>{l}</span>
+                      </div>
+                    ))}
+                    <span style={{ fontSize:".52rem", color:tk.textFaint, marginLeft:".5rem" }}>
+                      · TREND col shows net change first→last active fiscal week
+                    </span>
+                  </>
+                )}
+
+                <div style={{ display:"flex", alignItems:"center", gap:".5rem", marginLeft:".75rem" }}>
+                  {[
+                    {color:tk.receivingColor, bg:"rgba(51,65,85,.08)",   border:"rgba(51,65,85,.2)",   label:"RECEIVING"},
+                    {color:"#7c3aed",         bg:"rgba(124,58,237,.08)", border:"rgba(124,58,237,.3)", label:"TRAINING"},
+                  ].map(d=>(
+                    <div key={d.label} style={{ display:"flex", alignItems:"center", gap:".35rem",
+                      padding:".18rem .55rem", borderRadius:5, background:d.bg, border:`1px solid ${d.border}` }}>
+                      <div style={{ width:7, height:7, borderRadius:"50%", background:d.color }} />
+                      <span style={{ fontSize:".55rem", fontWeight:600, letterSpacing:".1em", color:d.color }}>{d.label}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:".5rem" }}>
+                  <span style={{ fontSize:".52rem", color:tk.textNav }}>TREND ARROWS:</span>
+                  <span style={{ fontSize:".65rem", color:"#22c55e", fontWeight:800 }}>▼</span>
+                  <span style={{ fontSize:".52rem", color:tk.textNav }}>IMPROVING</span>
+                  <span style={{ fontSize:".65rem", color:"#334155", fontWeight:800 }}>→</span>
+                  <span style={{ fontSize:".52rem", color:tk.textNav }}>STABLE</span>
+                  <span style={{ fontSize:".65rem", color:"#ef4444", fontWeight:800 }}>▲</span>
+                  <span style={{ fontSize:".52rem", color:tk.textNav }}>WORSENING</span>
+                </div>
+              </div>
+
+              {/* Divider */}
+              <div style={{ display:"flex", alignItems:"center", gap:".75rem", marginBottom:"1rem" }}>
+                <div style={{ height:1, flex:1, background:`linear-gradient(to right, ${activeShift.accent}66, transparent)` }} />
+                <span style={{ fontSize:".58rem", letterSpacing:".15em", fontWeight:600, color:activeShift.accent }}>
+                  {activeShift.label.toUpperCase()} · RECEIVING & TRAINING
+                </span>
+                <div style={{ height:1, flex:1, background:tk.border }} />
+              </div>
+
+              {/* Table */}
+              <div style={{ overflowX:"auto", overflowY:"visible" }}>
+                <table style={{ borderCollapse:"separate", borderSpacing:"2px", minWidth:"max-content", width:"100%" }}>
+                  <thead>
+                    <tr>
+                      <th className="sticky-th" style={{ textAlign:"left", fontSize:".55rem", color:tk.textNav,
+                        fontWeight:500, paddingBottom:".5rem", paddingRight:".5rem", whiteSpace:"nowrap", minWidth:80 }}>
+                        LanID
+                      </th>
+                      {FW.map((fw,i)=>{
+                        const hasData = sortedWMs.some(wm=>shiftCounts[wm]?.[fw.sheet]>0);
+                        const isSep   = monthBreaks.has(i) || yearBreaks.has(i);
+                        return (
+                          <th key={fw.sheet} className={isSep?"mo-sep":""}
+                            title={fw.range?`${fwLabel(fw)}: ${fw.range}`:fwLabel(fw)}
+                            style={{ fontSize:".5rem", fontWeight:500,
+                              color:hasData?tk.textMuted:tk.border,
+                              textAlign:"center", width:22, paddingBottom:".5rem",
+                              letterSpacing:".02em", cursor:"default", paddingLeft:isSep?4:0 }}>
+                            {fw.fw}
+                          </th>
+                        );
+                      })}
+                      <th style={{ fontSize:".55rem", color:tk.textNav, fontWeight:500,
+                        textAlign:"center", paddingLeft:".6rem", paddingBottom:".5rem", whiteSpace:"nowrap" }}>
+                        {viewMode==="delta"?"NET":"TOT"}
+                      </th>
+                      <th style={{ fontSize:".55rem", color:tk.textNav, fontWeight:500,
+                        textAlign:"center", paddingLeft:".4rem", paddingBottom:".5rem" }}>
+                        TREND
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedWMs.map(wm=>{
+                      const trend      = wmTrends[wm];
+                      const isTraining = data.trainingWMs.has(wm);
+                      const activeIdxs = FW.map((fw,i)=>({i, v:shiftCounts[wm]?.[fw.sheet]||0})).filter(o=>o.v>0);
+                      const netChange  = activeIdxs.length>=2
+                        ? activeIdxs[activeIdxs.length-1].v - activeIdxs[0].v
+                        : null;
+                      return (
+                        <tr key={wm}>
+                          <td className="sticky-wm" style={{ fontSize:".65rem", fontWeight:500,
+                            color:isTraining?"#a855f7":tk.receivingColor,
+                            paddingBottom:"2px", whiteSpace:"nowrap" }}>
+                            {wm}
+                            {isTraining && (
+                              <span style={{ marginLeft:".35rem", display:"inline-flex", alignItems:"center",
+                                justifyContent:"center", width:14, height:14, borderRadius:3,
+                                background:"rgba(124,58,237,.15)", border:"1px solid rgba(124,58,237,.35)",
+                                fontSize:".48rem", fontWeight:700, color:"#7c3aed",
+                                letterSpacing:".04em", verticalAlign:"middle" }}>T</span>
+                            )}
+                          </td>
+                          {FW.map((fw,idx)=>{
+                            const raw   = shiftCounts[wm]?.[fw.sheet]||0;
+                            const delta = getDelta(wm,idx);
+                            const isSep = monthBreaks.has(idx) || yearBreaks.has(idx);
+                            const bg    = viewMode==="raw"?heatBg(raw,maxVal):deltaBg(delta);
+                            const fg    = viewMode==="raw"?heatFg(raw,maxVal):deltaFg(delta);
+                            const txt   = viewMode==="raw"
+                              ?(raw>0?raw:"")
+                              :(delta===null?"":(delta===0?"·":((delta>0?"+":"")+delta)));
+                            return (
+                              <td key={fw.sheet} style={{ padding:0, textAlign:"center", paddingLeft:isSep?4:0 }}
+                                onMouseEnter={e=>setTooltip({wm,fw,raw,delta,isTraining,x:e.clientX,y:e.clientY})}
+                                onMouseLeave={()=>setTooltip(null)}>
+                                <div className="wk-cell" style={{ width:20, height:22, margin:"0 auto",
+                                  display:"flex", alignItems:"center", justifyContent:"center",
+                                  background:bg, color:fg, fontSize:".48rem", fontWeight:700 }}>
+                                  {txt}
+                                </div>
+                              </td>
+                            );
+                          })}
+                          <td style={{ textAlign:"center", paddingLeft:".6rem" }}>
+                            {viewMode==="raw" ? (
+                              <span style={{ fontSize:".65rem", fontWeight:700,
+                                color:wmTotals[wm]>avg*2?"#dc2626":wmTotals[wm]>avg?"#f59e0b":tk.text }}>
+                                {wmTotals[wm]}
+                              </span>
+                            ) : (
+                              <span style={{ fontSize:".65rem", fontWeight:700,
+                                color:netChange===null?tk.textNav:netChange<0?"#22c55e":netChange>0?"#ef4444":tk.textMuted }}>
+                                {netChange===null?"—":netChange===0?"·":((netChange>0?"+":"")+netChange)}
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ textAlign:"center", paddingLeft:".4rem" }}>
+                            <TrendArrow slope={trend} />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td className="sticky-wm" style={{ fontSize:".52rem", color:tk.textMuted,
+                        paddingTop:".75rem", fontWeight:600, letterSpacing:".05em" }}>WK TOTAL</td>
+                      {FW.map((fw,i)=>{
+                        const tot   = sortedWMs.reduce((s,wm)=>s+(shiftCounts[wm]?.[fw.sheet]||0),0);
+                        const isSep = monthBreaks.has(i) || yearBreaks.has(i);
+                        return (
+                          <td key={fw.sheet} style={{ textAlign:"center", paddingTop:".75rem", paddingLeft:isSep?4:0 }}>
+                            <span style={{ fontSize:".5rem", fontWeight:600, color:tot>0?tk.textMuted:tk.border }}>
+                              {tot>0?tot:""}
+                            </span>
+                          </td>
+                        );
+                      })}
+                      <td style={{ textAlign:"center", paddingLeft:".6rem", paddingTop:".75rem" }}>
+                        <span style={{ fontSize:".65rem", fontWeight:700, color:"#d97706" }}>{grandTotal}</span>
+                      </td>
+                      <td />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+
+              {/* Top movers */}
+              <div className="no-print" style={{ marginTop:"1.5rem", display:"flex", gap:".4rem", flexWrap:"wrap", alignItems:"center" }}>
+                <span style={{ fontSize:".52rem", color:tk.textMuted, letterSpacing:".1em", marginRight:".25rem" }}>
+                  TOP OFFENDERS
+                </span>
+                {sortedWMs.slice(0,6).map((wm,i)=>{
+                  const isTraining = data.trainingWMs.has(wm);
+                  return (
+                    <span key={wm} style={{ display:"inline-flex", alignItems:"center", gap:".3rem",
+                      padding:".15rem .5rem", borderRadius:4, fontSize:".58rem",
+                      letterSpacing:".08em", fontWeight:500,
+                      background:i===0?"rgba(239,68,68,.1)":tk.tabBg,
+                      color:isTraining?"#a855f7":i===0?"#dc2626":tk.textMuted,
+                      border:`1px solid ${isTraining?"rgba(168,85,247,.4)":i===0?"rgba(239,68,68,.4)":tk.borderMuted}` }}>
+                      <TrendArrow slope={wmTrends[wm]} />
+                      {wm} · {wmTotals[wm]}
+                    </span>
+                  );
+                })}
+                <div style={{ marginLeft:"auto", display:"flex", gap:"1rem" }}>
+                  {[
+                    {color:"#22c55e", label:"IMPROVING", count:sortedWMs.filter(w=>wmTrends[w]<-0.04).length},
+                    {color:tk.textMuted, label:"STABLE",  count:sortedWMs.filter(w=>Math.abs(wmTrends[w])<=0.04).length},
+                    {color:"#ef4444", label:"WORSENING", count:sortedWMs.filter(w=>wmTrends[w]>0.04).length},
+                  ].map(s=>(
+                    <div key={s.label} style={{ textAlign:"center" }}>
+                      <div style={{ fontSize:".5rem", color:tk.textNav, letterSpacing:".08em" }}>{s.label}</div>
+                      <div style={{ fontSize:".9rem", fontWeight:700, color:s.color, fontFamily:"DM Sans,sans-serif" }}>{s.count}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Tooltip */}
+          {tooltip && (
+            <div style={{ position:"fixed", left:tooltip.x+12, top:tooltip.y-14,
+              background:tk.tooltipBg, border:`1px solid ${tk.tooltipBorder}`, borderRadius:8,
+              padding:".4rem .85rem", fontSize:".68rem", color:tk.text,
+              pointerEvents:"none", zIndex:999, whiteSpace:"nowrap", boxShadow:"0 6px 24px rgba(0,0,0,.18)" }}>
+              <strong style={{ color:tooltip.isTraining?"#a855f7":activeShift.accent }}>{tooltip.wm}</strong>
+              {tooltip.isTraining && (
+                <span style={{ marginLeft:".35rem", display:"inline-flex", alignItems:"center",
+                  justifyContent:"center", width:14, height:14, borderRadius:3,
+                  background:"rgba(124,58,237,.15)", border:"1px solid rgba(124,58,237,.35)",
+                  fontSize:".48rem", fontWeight:700, color:"#7c3aed", letterSpacing:".04em", verticalAlign:"middle" }}>T</span>
+              )}
+              <span style={{ color:tk.textMuted }}> · {fwLabel(tooltip.fw)}</span>
+              {tooltip.fw.range && <span style={{ color:tk.textFaint }}> ({tooltip.fw.range})</span>}
+              <span style={{ color:tk.textNav }}> → </span>
+              <strong style={{ color:tooltip.raw>0?"#f59e0b":tk.textNav }}>
+                {tooltip.raw} incident{tooltip.raw!==1?"s":""}
+              </strong>
+              {tooltip.delta!==null && (
+                <span style={{ marginLeft:".5rem",
+                  color:tooltip.delta<0?"#22c55e":tooltip.delta>0?"#ef4444":tk.textMuted }}>
+                  ({tooltip.delta>0?"+":""}{tooltip.delta} vs prev FW)
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
