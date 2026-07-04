@@ -1,0 +1,1090 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monthly Error Report</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    :root {
+      --page-bg: linear-gradient(160deg, #f1f5f9, #e2e8f0);
+      --card:        #ffffff;
+      --card-border: #e2e8f0;
+      --text-primary:#0f172a;
+      --text-second: #475569;
+      --text-muted:  #94a3b8;
+      --shadow:      0 2px 12px rgba(0,0,0,0.07);
+      --track-bg:    #f1f5f9;
+      --row-alt:     #f8fafc;
+    }
+    .dark {
+      --page-bg: linear-gradient(160deg, #0f172a, #111827);
+      --card:        #111827;
+      --card-border: #1e293b;
+      --text-primary:#f1f5f9;
+      --text-second: #94a3b8;
+      --text-muted:  #64748b;
+      --shadow:      0 2px 14px rgba(0,0,0,0.35);
+      --track-bg:    #1e293b;
+      --row-alt:     #0b1220;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--page-bg);
+      min-height: 100vh;
+      padding: 28px 16px 80px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      transition: background 0.25s;
+    }
+    .container { max-width: 720px; margin: 0 auto; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 24px 26px 22px;
+      margin-bottom: 20px;
+      box-shadow: var(--shadow);
+      transition: background 0.25s, border-color 0.25s;
+    }
+    .card-summary { padding: 18px 20px; }
+    .badge {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      padding: 3px 10px;
+      border-radius: 20px;
+    }
+    .section-header { margin-bottom: 18px; }
+    .section-header h2 {
+      margin: 8px 0 4px;
+      font-size: 19px;
+      font-weight: 800;
+      color: var(--text-primary);
+      letter-spacing: -0.3px;
+    }
+    .section-header p { font-size: 13px; color: var(--text-second); }
+    /* Top nav (Hub / Print / Theme) — matches Weekly Error Report layout */
+    .top-nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 22px;
+    }
+    .top-nav-right { display: flex; gap: 8px; }
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 22px;
+    }
+    .eyebrow {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    h1 { font-size: 26px; font-weight: 800; color: var(--text-primary); letter-spacing: -0.5px; }
+    select {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-primary);
+      cursor: pointer;
+      outline: none;
+      margin-top: 10px;
+    }
+    /* Summary tiles */
+    .stat-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+    .stat-tile { flex: 1 1 130px; border-radius: 10px; padding: 9px 16px; }
+    .stat-tile .s-label { font-size: 10.5px; color: var(--text-second); margin-bottom: 2px; }
+    .stat-tile .s-value { font-size: 17px; font-weight: 800; }
+    /* MoM */
+    .mom-row { display: flex; align-items: center; gap: 18px; margin-top: 4px; flex-wrap: wrap; }
+    .mom-col { text-align: center; }
+    .mom-col .mc-label { font-size: 11px; color: var(--text-muted); }
+    .mom-col .mc-val   { font-size: 26px; font-weight: 800; }
+    .mom-arrow { font-size: 30px; font-weight: 800; }
+    .mom-right { margin-left: auto; text-align: right; }
+    .mom-right .mr-delta { font-size: 20px; font-weight: 800; }
+    .mom-right .mr-dir   { font-size: 11px; color: var(--text-muted); }
+    /* Shift/dept tiles */
+    .split-tiles { display: flex; gap: 10px; margin-top: 6px; }
+    .split-tile  { flex: 1; text-align: center; padding: 8px 4px; border-radius: 10px; background: var(--track-bg); }
+    .split-tile .t-name  { font-size: 11px; color: var(--text-second); }
+    .split-tile .t-count { font-size: 16px; font-weight: 800; }
+    .split-tile .t-pct   { font-size: 11px; color: var(--text-muted); }
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      text-align: left;
+      padding: 6px 10px;
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--card-border);
+      font-weight: 700;
+    }
+    th.r { text-align: right; }
+    th.c { text-align: center; }
+    td { padding: 8px 10px; font-size: 13.5px; color: var(--text-primary); }
+    td.r { text-align: right; font-weight: 700; }
+    td.c { text-align: center; }
+    td.m { text-align: right; color: var(--text-muted); width: 72px; font-size: 13px; }
+    tr:nth-child(even) td { background: var(--row-alt); }
+    /* Shift badge (matches Weekly Error Report processor table) */
+    .shift-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 800;
+      padding: 3px 10px;
+      border-radius: 12px;
+    }
+    /* Rolling */
+    .rolling-avg { font-size: 12.5px; color: var(--text-second); margin-top: 14px; line-height: 1.5; }
+    /* Checkpoints */
+    .cp-label { font-size: 13px; font-weight: 800; color: var(--text-primary); margin-top: 18px; }
+    .cp-label:first-child { margin-top: 4px; }
+    .cp-subtotal {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--card-border);
+    }
+    .cp-sub-label { font-size: 12px; font-weight: 700; color: var(--text-second); text-transform: uppercase; letter-spacing: 0.5px; }
+    .cp-sub-val   { font-size: 15px; font-weight: 800; color: #0284C7; }
+    .cp-sub-pct   { color: var(--text-muted); font-weight: 600; font-size: 12px; }
+    .no-err { margin-top: 10px; padding: 14px 10px; text-align: center; color: var(--text-muted); font-size: 13px; font-style: italic; }
+    /* Takeaways */
+    .takeaway {
+      margin-bottom: 14px;
+      padding-left: 14px;
+      border-left: 3px solid #16A34A30;
+    }
+    .dark .takeaway { border-left-color: #16A34A55; }
+    .takeaway h3 { font-size: 14px; font-weight: 700; color: var(--text-primary); margin-bottom: 3px; }
+    .takeaway p  { font-size: 13px; color: var(--text-second); line-height: 1.5; }
+    canvas { display: block; }
+    @media (max-width: 500px) {
+      .mom-right { width: 100%; text-align: left; margin-left: 0; margin-top: 8px; }
+    }
+    .hdr-btn {
+      display: flex; align-items: center; gap: 6px;
+      background: var(--card); border: 1px solid var(--card-border);
+      border-radius: 20px; padding: 7px 14px;
+      cursor: pointer; font-size: 12px; font-weight: 700;
+      color: var(--text-primary); box-shadow: var(--shadow);
+      white-space: nowrap; text-decoration: none;
+    }
+    .hdr-btn:hover { opacity: 0.82; }
+    /* Sticky month nav */
+    #sticky-nav {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: center; gap: 0;
+      background: var(--card); border-top: 1px solid var(--card-border);
+      box-shadow: 0 -2px 16px rgba(0,0,0,0.10); padding: 10px 16px;
+    }
+    .nav-arrow {
+      background: none; border: 1px solid var(--card-border);
+      border-radius: 10px; width: 38px; height: 38px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; cursor: pointer; color: var(--text-primary); flex-shrink: 0;
+    }
+    .nav-arrow:hover:not(:disabled) { background: var(--track-bg); }
+    .nav-arrow:disabled { opacity: 0.25; cursor: default; }
+    #nav-label {
+      font-size: 14px; font-weight: 800; color: var(--text-primary);
+      min-width: 82px; text-align: center;
+      padding: 6px 14px; border-radius: 10px;
+      border: 1px solid var(--card-border); margin: 0 8px;
+      background: var(--track-bg); user-select: none;
+    }
+    #nav-hint {
+      font-size: 11px; color: var(--text-muted);
+      margin-left: 12px; white-space: nowrap;
+    }
+    /* Loading / Error states */
+    #loading-wrap, #error-wrap {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      min-height: 60vh; gap: 14px; text-align: center; padding: 24px;
+    }
+    .spinner {
+      width: 40px; height: 40px; border: 4px solid var(--card-border);
+      border-top-color: #0284C7; border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #app-content { display: none; }
+
+    /* ===================== PRINT ===================== */
+    @media print {
+      body { background: #fff !important; padding: 0 !important; }
+      .no-print, #sticky-nav, select { display: none !important; }
+      .card {
+        box-shadow: none !important;
+        border: 1px solid #ccc !important;
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+      .print-break { page-break-before: always; break-before: page; }
+      * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Loading state -->
+  <div id="loading-wrap">
+    <div class="spinner"></div>
+    <div style="font-size:14px;font-weight:600;color:var(--text-second)">Loading workbook from GitHub…</div>
+  </div>
+
+  <!-- Error state -->
+  <div id="error-wrap" style="display:none">
+    <div style="font-size:40px">⚠️</div>
+    <div style="font-size:15px;font-weight:700;color:var(--text-primary)">Unable to load workbook</div>
+    <div id="error-msg" style="font-size:13px;color:var(--text-second);max-width:380px"></div>
+    <button class="hdr-btn" onclick="init()" style="margin-top:6px">↺ Retry</button>
+    <a class="hdr-btn" href="index.html">← Hub</a>
+  </div>
+
+  <!-- Main app content -->
+  <div id="app-content">
+
+    <!-- Top nav: Hub / Print / Theme — uniform across all dashboards -->
+    <div class="top-nav no-print">
+      <a class="hdr-btn" href="index.html">← Hub</a>
+      <div class="top-nav-right">
+        <button class="hdr-btn" id="print-btn" onclick="window.print()">🖨️ Print / Save PDF</button>
+        <button class="hdr-btn" id="theme-btn" onclick="toggleTheme()">🌙 Dark</button>
+      </div>
+    </div>
+
+    <!-- Page header -->
+    <div class="page-header">
+      <div>
+        <div class="eyebrow">Receiving Research Error Form</div>
+        <h1>Monthly Error Report</h1>
+        <select id="month-select"></select>
+      </div>
+    </div>
+
+    <!-- Summary -->
+    <div class="card card-summary">
+      <div style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;">Summary</div>
+      <div class="stat-grid" id="summary-tiles"></div>
+    </div>
+
+    <!-- Month-over-Month -->
+    <div class="card">
+      <div class="section-header" id="mom-header"></div>
+      <div id="mom-body"></div>
+    </div>
+
+    <!-- 6-Month Rolling -->
+    <div class="card">
+      <div class="section-header" id="rolling-header"></div>
+      <canvas id="chart-rolling" style="width:100%;height:180px;"></canvas>
+      <table style="margin-top:14px;" id="rolling-table"></table>
+      <div class="rolling-avg" id="rolling-avg"></div>
+    </div>
+
+    <!-- 6-Month Receiving-Only Shift Trend -->
+    <div class="card">
+      <div class="section-header" id="recv-shift-header"></div>
+      <canvas id="chart-recv-shift" style="width:100%;height:180px;"></canvas>
+      <div style="display:flex;gap:16px;margin-top:12px;justify-content:center;" id="recv-shift-legend"></div>
+      <table style="margin-top:16px;" id="recv-shift-table"></table>
+    </div>
+
+    <!-- Shift donut -->
+    <div class="card">
+      <div class="section-header">
+        <span class="badge" style="color:#7C3AED;background:#ede9fe;">By Shift</span>
+        <h2>Error Share by Shift</h2>
+        <p>A-Shift, B-Shift, C-Shift — % of total errors this month</p>
+      </div>
+      <canvas id="chart-shift" style="width:100%;max-height:260px;"></canvas>
+      <div class="split-tiles" id="shift-tiles"></div>
+    </div>
+
+    <!-- Dept donut -->
+    <div class="card">
+      <div class="section-header">
+        <span class="badge" style="color:#0EA5E9;background:#e0f2fe;">By Department</span>
+        <h2>Receiving vs. Transfers</h2>
+        <p>Home Department — Receiving vs. all transfer departments combined</p>
+      </div>
+      <canvas id="chart-dept" style="width:100%;max-height:260px;"></canvas>
+      <div class="split-tiles" id="dept-tiles"></div>
+    </div>
+
+    <!-- Checkpoints -->
+    <div class="card print-break">
+      <div class="section-header">
+        <span class="badge" style="color:#0284C7;background:#e0f2fe;">Checkpoints</span>
+        <h2>Errors by Checkpoint</h2>
+        <p>Shipment, Piece, and Carton checks — all error types logged this month</p>
+      </div>
+      <div id="checkpoint-body"></div>
+    </div>
+
+    <!-- Processors 5+ -->
+    <div class="card print-break">
+      <div class="section-header" id="procs-header"></div>
+      <table id="procs-table"></table>
+    </div>
+
+    <!-- Key Takeaways -->
+    <div class="card">
+      <div class="section-header">
+        <span class="badge" style="color:#16A34A;background:#dcfce7;">Analysis</span>
+        <h2>Key Takeaways</h2>
+      </div>
+      <div id="takeaways-body"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Sticky month nav (hidden until loaded) -->
+<div id="sticky-nav" style="display:none">
+  <button class="nav-arrow" id="nav-prev" onclick="stepMonth(-1)" title="Previous month">&#8592;</button>
+  <div id="nav-label" onclick="scrollToTop()" title="Tap to scroll to top">—</div>
+  <button class="nav-arrow" id="nav-next" onclick="stepMonth(1)" title="Next month">&#8594;</button>
+  <span id="nav-hint">&#8593; tap label to scroll up</span>
+</div>
+
+<script>
+/* ============================================================
+   CONFIG / DESIGN TOKENS — locked design system
+   ============================================================ */
+const WORKBOOK_URL =
+  "https://raw.githubusercontent.com/JacobBecicka/Receiving_Error_Dashboard/main/AI_Safe_Weekly_Error_Data.xlsx";
+const SHIFT_COLORS = { A: '#38BDF8', B: '#A78BFA', C: '#34D399' };
+const TREND_DOWN   = '#34D399';   // improving
+const TREND_UP     = '#f87171';   // worsening
+
+// ------------------------------------------------------------------
+// Fiscal week sheet naming
+// Sheets are now named directly with their fiscal week, e.g. "FW1 26",
+// "FW48 25" — no more "Week N" calendar-index sheets, so no anchor/
+// offset detection is needed to find fiscal week 1. We just parse the
+// fiscal week number + 2-digit fiscal year straight out of the sheet
+// name.
+// ------------------------------------------------------------------
+const FW_SHEET_RE = /^FW\s*(\d+)\s+(\d+)$/i;
+
+// Each sheet still carries its own ground-truth CALENDAR date-range
+// label in row 2 (e.g. "2/1 - 2/7") — that part of the workbook format
+// hasn't changed, so per-row Start-time bucketing into calendar months
+// still works exactly as before. The only thing that changed is how we
+// figure out which CALENDAR YEAR that date range falls in: fiscal years
+// start Feb 1, so fiscal year "25" runs Feb 2025 -> Jan 2026. That means
+// a January date range under fiscal year 25 is actually calendar year
+// 2026, while Feb-Dec date ranges match the fiscal year number directly.
+function calendarYearForMonth(fiscalYY, month) {
+  const base = 2000 + fiscalYY;
+  return month === 1 ? base + 1 : base;
+}
+function parseSheetDateRange(rows, fiscalYY) {
+  const label = String(rows[1]?.[1] || "");
+  const m = label.match(/^\s*(\d+)\/(\d+)\s*-\s*(\d+)\/(\d+)/);
+  if (!m) return null;
+  const [, sm, sd, em, ed] = m.map(Number);
+  const syear = calendarYearForMonth(fiscalYY, sm);
+  const eyear = calendarYearForMonth(fiscalYY, em);
+  return {
+    start: new Date(syear, sm - 1, sd),
+    end:   new Date(eyear, em - 1, ed),
+    fallbackKey: `${syear}-${String(sm).padStart(2,'0')}`,
+  };
+}
+function excelSerialToDate(n) {
+  // Excel epoch: serial 0 = 1899-12-30
+  return new Date(Date.UTC(1899, 11, 30) + n * 86400000);
+}
+function parseRowDate(v) {
+  if (v instanceof Date) return v;
+  if (typeof v === 'number') return excelSerialToDate(v);
+  const s = String(v || '').trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(+m[1], +m[2]-1, +m[3]);
+  // Fallback: handle "M/D/YY H:MM" or "M/D/YYYY" style strings
+  // (the Start time column can arrive as plain text depending on
+  // how the workbook cell is formatted).
+  const m2 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (m2) {
+    let [, mo, da, yr] = m2;
+    yr = yr.length === 2 ? (2000 + +yr) : +yr;
+    return new Date(yr, +mo - 1, +da);
+  }
+  return null;
+}
+
+/* ============================================================
+   HELPERS
+   ============================================================ */
+function isNoError(v) {
+  const s = String(v || "").trim().toLowerCase();
+  return !s || s === "no errors" || s === "no error";
+}
+function monthLabel(k) {
+  const [y, m] = k.split('-');
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','June','July','Aug','Sep','Oct','Nov','Dec'];
+  return `${MONTHS[parseInt(m, 10) - 1]} ${y.slice(2)}`;
+}
+function pct(n, total) {
+  return total ? `${((n / total) * 100).toFixed(1)}%` : '—';
+}
+function cpSum(arr) {
+  return arr.reduce((s, [, v]) => s + v, 0);
+}
+function esc(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function sortObj(o) {
+  return Object.entries(o).sort((a,b) => b[1]-a[1]);
+}
+
+/* ============================================================
+   XLSX PARSING — grouped by calendar month
+   Same column layout and shift-validation logic as the
+   Weekly Error Report / Processor Error Card / YTD Report:
+     col 1  = Start time      col 6  = WM Sign-On (LanID)
+     col 9  = Shift           col 10 = Home Dept
+     col 11 = Shipment errors (CP1)
+     col 12 = Piece errors (CP2)   col 13 = Carton errors (CP3)
+
+   NOTE: Rows are bucketed into calendar months using the Start
+   time column (when the error was LOGGED), not Date Error
+   Occurred (when the error happened on the floor). Errors can sit
+   unnoticed for months before being found/logged, so logging date
+   is the correct basis for monthly grouping.
+   ============================================================ */
+function parseWorkbookToMonths(wb) {
+  const months = {}; // monthKey -> accumulator
+
+  const ensureMonth = mk => {
+    if (!months[mk]) {
+      months[mk] = {
+        total: 0, shiftA: 0, shiftB: 0, shiftC: 0,
+        receiving: 0, transfers: 0,
+        recvShiftA: 0, recvShiftB: 0, recvShiftC: 0,
+        shipment: {}, piece: {}, carton: {}, procs: {}, procShift: {},
+      };
+    }
+    return months[mk];
+  };
+
+  wb.SheetNames.forEach(sheetName => {
+    const m = sheetName.match(FW_SHEET_RE);
+    if (!m) return;
+    const fiscalYY = parseInt(m[2], 10);
+
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header:1, defval:"" });
+    if (!rows || rows.length < 6) return;
+
+    const range = parseSheetDateRange(rows, fiscalYY);
+    if (!range) return; // can't determine which month this sheet covers
+    const { start: sheetStart, end: sheetEnd, fallbackKey } = range;
+    const slack = 3 * 86400000; // 3-day tolerance for row-level date noise
+
+    const dataRows = rows.slice(5).filter(r => r && String(r[6]||"").trim());
+
+    dataRows.forEach(row => {
+      const shiftRaw = String(row[9]  || "").replace(/\xa0/g,"").trim();
+      const dept     = String(row[10] || "").replace(/\xa0/g,"").trim().toLowerCase();
+      const wm       = String(row[6]  || "").trim();
+      const se       = String(row[11] || "").trim();
+      const pe       = String(row[12] || "").trim();
+      const ce       = String(row[13] || "").trim();
+
+      // Shift validation — skip rows without a recognizable shift
+      // (matches YTD / Weekly / Processor Error Card logic exactly)
+      const sk = /^a(-?shift)?$/i.test(shiftRaw) ? "A"
+               : /^b(-?shift)?$/i.test(shiftRaw) ? "B"
+               : /^c(-?shift)?$/i.test(shiftRaw) ? "C"
+               : null;
+      if (!sk) return;
+      if (isNoError(se) && isNoError(pe) && isNoError(ce)) return;
+
+      // Determine which month this row belongs to: trust the row's
+      // own Start time (when the error was logged) if it falls within
+      // (or close to) this sheet's actual date range — this correctly
+      // splits boundary weeks (e.g. "3/29 - 4/4") across two months.
+      // Fall back to the sheet's own label for rows with missing/stray
+      // timestamps (typos can land far outside the sheet's range and
+      // would otherwise create noisy one-off months).
+      const rowDate = parseRowDate(row[1]);
+      let mk = fallbackKey;
+      if (rowDate && rowDate.getTime() >= sheetStart.getTime() - slack
+                  && rowDate.getTime() <= sheetEnd.getTime() + slack) {
+        mk = `${rowDate.getFullYear()}-${String(rowDate.getMonth()+1).padStart(2,'0')}`;
+      }
+
+      const acc = ensureMonth(mk);
+      acc.total++;
+      acc[`shift${sk}`]++;
+      if (dept.includes("receiv")) { acc.receiving++; acc[`recvShift${sk}`]++; } else acc.transfers++;
+      if (wm) {
+        acc.procs[wm] = (acc.procs[wm] || 0) + 1;
+        if (!acc.procShift[wm]) acc.procShift[wm] = { A: 0, B: 0, C: 0 };
+        acc.procShift[wm][sk]++;
+      }
+
+      const add = (str, counter) => {
+        if (isNoError(str)) return;
+        str.split(";").forEach(e => {
+          const t = e.trim();
+          if (t && !isNoError(t)) counter[t] = (counter[t] || 0) + 1;
+        });
+      };
+      add(se, acc.shipment); add(pe, acc.piece); add(ce, acc.carton);
+    });
+  });
+
+  // Finalize: convert error-type maps to sorted arrays, build procs5 list
+  const finalized = {};
+  Object.entries(months).forEach(([mk, acc]) => {
+    finalized[mk] = {
+      total: acc.total, shiftA: acc.shiftA, shiftB: acc.shiftB, shiftC: acc.shiftC,
+      receiving: acc.receiving, transfers: acc.transfers,
+      recvShiftA: acc.recvShiftA, recvShiftB: acc.recvShiftB, recvShiftC: acc.recvShiftC,
+      shipment: sortObj(acc.shipment),
+      piece:    sortObj(acc.piece),
+      carton:   sortObj(acc.carton),
+      // Each entry: [lanId, count, dominantShift]
+      procs5: Object.entries(acc.procs)
+        .filter(([,c]) => c >= 5)
+        .sort((a,b) => b[1]-a[1])
+        .map(([name, count]) => {
+          const sc = acc.procShift[name] || { A: 0, B: 0, C: 0 };
+          const dominantShift = Object.entries(sc).sort((a,b) => b[1]-a[1])[0][0];
+          return [name, count, dominantShift];
+        }),
+    };
+  });
+  return finalized;
+}
+
+/* ============================================================
+   STATE
+   ============================================================ */
+let MONTHLY_DATA = {};
+let MONTH_KEYS = [];
+let currentMonth = null;
+let isDark = false;
+let charts = { rolling: null, shift: null, dept: null, recvShift: null };
+
+/* ============================================================
+   LOAD / INIT
+   ============================================================ */
+async function init() {
+  document.getElementById('loading-wrap').style.display = 'flex';
+  document.getElementById('error-wrap').style.display = 'none';
+  document.getElementById('app-content').style.display = 'none';
+  document.getElementById('sticky-nav').style.display = 'none';
+
+  try {
+    const res = await fetch(WORKBOOK_URL);
+    if (!res.ok) throw new Error(`HTTP ${res.status} — unable to fetch workbook from GitHub.`);
+    const buf = await res.arrayBuffer();
+    const wb  = XLSX.read(buf, { type: 'array' });
+
+    MONTHLY_DATA = parseWorkbookToMonths(wb);
+    MONTH_KEYS   = Object.keys(MONTHLY_DATA).sort();
+
+    if (!MONTH_KEYS.length) throw new Error('No monthly data found in workbook.');
+
+    currentMonth = MONTH_KEYS[MONTH_KEYS.length - 1];
+
+    document.getElementById('loading-wrap').style.display = 'none';
+    document.getElementById('app-content').style.display = 'block';
+    document.getElementById('sticky-nav').style.display = 'flex';
+
+    initDropdown();
+    render();
+  } catch (err) {
+    document.getElementById('loading-wrap').style.display = 'none';
+    document.getElementById('error-msg').textContent = err.message;
+    document.getElementById('error-wrap').style.display = 'flex';
+  }
+}
+
+/* ============================================================
+   THEME
+   ============================================================ */
+function toggleTheme() {
+  isDark = !isDark;
+  document.body.classList.toggle('dark', isDark);
+  document.getElementById('theme-btn').textContent = isDark ? '☀️ Light' : '🌙 Dark';
+  render();
+}
+
+/* ============================================================
+   DROPDOWN
+   ============================================================ */
+function initDropdown() {
+  const sel = document.getElementById('month-select');
+  sel.innerHTML = '';
+  MONTH_KEYS.forEach(k => {
+    const opt = document.createElement('option');
+    opt.value = k;
+    opt.textContent = monthLabel(k);
+    sel.appendChild(opt);
+  });
+  sel.value = currentMonth;
+  sel.onchange = e => { currentMonth = e.target.value; render(); };
+}
+
+/* ============================================================
+   CHART FACTORY
+   ============================================================ */
+function destroyChart(key) {
+  if (charts[key]) { try { charts[key].destroy(); } catch(_) {} charts[key] = null; }
+}
+
+function makeDoughnut(id, labels, values, colors) {
+  destroyChart(id);
+  const gridC = isDark ? '#1e293b' : '#e2e8f0';
+  const textC = isDark ? '#94a3b8' : '#475569';
+  const bgC   = isDark ? '#111827' : '#ffffff';
+  charts[id] = new Chart(document.getElementById(id), {
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: colors,
+        borderColor: bgC,
+        borderWidth: 3,
+        hoverOffset: 6,
+      }],
+    },
+    options: {
+      cutout: '60%',
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { color: textC, font: { size: 12 }, padding: 16, boxWidth: 14 },
+        },
+        tooltip: {
+          backgroundColor: bgC,
+          borderColor: gridC,
+          borderWidth: 1,
+          titleColor: isDark ? '#f1f5f9' : '#0f172a',
+          bodyColor: textC,
+          callbacks: {
+            label: ctx => ` ${ctx.label}: ${ctx.raw} (${((ctx.raw / values.reduce((a,b)=>a+b,0))*100).toFixed(1)}%)`,
+          },
+        },
+      },
+    },
+  });
+}
+
+function makeBarChart(labels, values, currentIdx) {
+  destroyChart('rolling');
+  const gridC = isDark ? '#1e293b' : '#e2e8f0';
+  const textC = isDark ? '#94a3b8' : '#475569';
+  const mutC  = isDark ? '#64748b' : '#94a3b8';
+  const bgC   = isDark ? '#111827' : '#ffffff';
+  charts['rolling'] = new Chart(document.getElementById('chart-rolling'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: values.map((_, i) => i === currentIdx ? '#7C3AED' : '#94A3B8'),
+        borderRadius: 6,
+        borderSkipped: false,
+      }],
+    },
+    options: {
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: bgC,
+          borderColor: gridC,
+          borderWidth: 1,
+          titleColor: isDark ? '#f1f5f9' : '#0f172a',
+          bodyColor: textC,
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: textC, font: { size: 12 } },
+          grid:  { display: false },
+          border:{ color: gridC },
+        },
+        y: {
+          ticks: { color: mutC, font: { size: 11 } },
+          grid:  { color: gridC },
+          border:{ display: false },
+        },
+      },
+    },
+  });
+}
+
+function makeShiftLineChart(labels, aVals, bVals, cVals) {
+  destroyChart('recvShift');
+  const gridC = isDark ? '#1e293b' : '#e2e8f0';
+  const textC = isDark ? '#94a3b8' : '#475569';
+  const mutC  = isDark ? '#64748b' : '#94a3b8';
+  const bgC   = isDark ? '#111827' : '#ffffff';
+  const mkSet = (label, data, color) => ({
+    label, data, borderColor: color, backgroundColor: color,
+    pointBackgroundColor: color, pointRadius: 3, tension: 0.3,
+    borderWidth: 2.5, fill: false,
+  });
+  charts['recvShift'] = new Chart(document.getElementById('chart-recv-shift'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        mkSet('A-Shift', aVals, SHIFT_COLORS.A),
+        mkSet('B-Shift', bVals, SHIFT_COLORS.B),
+        mkSet('C-Shift', cVals, SHIFT_COLORS.C),
+      ],
+    },
+    options: {
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: bgC,
+          borderColor: gridC,
+          borderWidth: 1,
+          titleColor: isDark ? '#f1f5f9' : '#0f172a',
+          bodyColor: textC,
+        },
+      },
+      scales: {
+        x: {
+          ticks: { color: textC, font: { size: 12 } },
+          grid:  { display: false },
+          border:{ color: gridC },
+        },
+        y: {
+          beginAtZero: true,
+          ticks: { color: mutC, font: { size: 11 }, precision: 0 },
+          grid:  { color: gridC },
+          border:{ display: false },
+        },
+      },
+    },
+  });
+}
+
+/* ============================================================
+   TAKEAWAYS
+   ============================================================ */
+function buildTakeaways(data, prevData, mk, prevKey) {
+  const total = data.total;
+
+  // 1 — busiest shift
+  const shiftArr = [['A', data.shiftA], ['B', data.shiftB], ['C', data.shiftC]];
+  const [busyL, busyN] = [...shiftArr].sort((a,b) => b[1]-a[1])[0];
+  let t1b = `${busyL}-Shift generated ${busyN} of the ${total} errors in ${monthLabel(mk)} (${pct(busyN, total)}). `;
+  if (prevData) {
+    const prevArr = [['A', prevData.shiftA], ['B', prevData.shiftB], ['C', prevData.shiftC]];
+    const [pL, pN] = [...prevArr].sort((a,b) => b[1]-a[1])[0];
+    t1b += pL === busyL
+      ? `${busyL}-Shift also led in ${monthLabel(prevKey)} at ${pct(pN, prevData.total)}.`
+      : `${pL}-Shift led the prior month at ${pct(pN, prevData.total)} — a shift in volume distribution.`;
+  } else {
+    t1b += 'No prior month available for shift comparison.';
+  }
+
+  // 2 — month-over-month
+  let t2h, t2b;
+  if (prevData) {
+    const delta    = total - prevData.total;
+    const deltaPct = prevData.total ? ((delta / prevData.total) * 100).toFixed(1) : '0.0';
+    const dir      = delta < 0 ? 'down' : delta > 0 ? 'up' : 'unchanged';
+    t2h = `Total errors ${dir} ${Math.abs(delta)} (${delta > 0 ? '+' : ''}${deltaPct}%) vs. ${monthLabel(prevKey)}`;
+    t2b = `${monthLabel(mk)} recorded ${total} errors vs. ${prevData.total} in ${monthLabel(prevKey)} — `
+      + `a ${dir === 'unchanged' ? 'flat' : dir} trend of ${delta > 0 ? '+' : ''}${delta} (${delta > 0 ? '+' : ''}${deltaPct}%). `
+      + (delta > 0 ? 'A continued rise warrants monitoring going into next month.'
+       : delta < 0 ? 'A decline from the prior month — positive directional movement.'
+       : 'No net change from the prior month.');
+  } else {
+    t2h = 'No prior month data available for comparison';
+    t2b = `${monthLabel(mk)} is the earliest month on record. Month-over-month comparisons will be available starting next month.`;
+  }
+
+  // 3 — top checkpoint
+  const cps = [
+    { name: 'Shipment', total: cpSum(data.shipment), arr: data.shipment },
+    { name: 'Piece',    total: cpSum(data.piece),    arr: data.piece    },
+    { name: 'Carton',   total: cpSum(data.carton),   arr: data.carton   },
+  ].sort((a,b) => b.total - a.total);
+  const topCP  = cps[0];
+  const topErr = topCP.arr[0];
+  const t3b = `${topCP.name} errors totaled ${topCP.total} this month (${pct(topCP.total, total)} of all errors).`
+    + (topErr ? ` Leading error type: "${topErr[0]}" (${topErr[1]} occurrences).` : '');
+
+  return [
+    { h: `${busyL}-Shift accounts for ${pct(busyN, total)} of monthly errors`, b: t1b },
+    { h: t2h, b: t2b },
+    { h: `${topCP.name} leads all checkpoints at ${pct(topCP.total, total)} of errors`, b: t3b },
+  ];
+}
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+function render() {
+  const mk      = currentMonth;
+  const data    = MONTHLY_DATA[mk];
+  const selIdx  = MONTH_KEYS.indexOf(mk);
+  const prevKey = selIdx > 0 ? MONTH_KEYS[selIdx - 1] : null;
+  const prevData= prevKey ? MONTHLY_DATA[prevKey] : null;
+  const total   = data.total;
+  const p = n => pct(n, total);
+
+  /* —— Busiest shift / top checkpoint for summary —— */
+  const shiftArr = [['A', data.shiftA], ['B', data.shiftB], ['C', data.shiftC]];
+  const [busyL, busyN] = [...shiftArr].sort((a,b) => b[1]-a[1])[0];
+  const cps = [
+    { name:'Shipment', v: cpSum(data.shipment) },
+    { name:'Piece',    v: cpSum(data.piece) },
+    { name:'Carton',   v: cpSum(data.carton) },
+  ].sort((a,b) => b.v-a.v);
+  const topCP = cps[0];
+
+  /* —— SUMMARY TILES —— */
+  const summaryEl = document.getElementById('summary-tiles');
+  summaryEl.innerHTML = [
+    { label:'Total Errors',     value: total,                                        color:'#16A34A', bg: isDark?'#16A34A22':'#dcfce7' },
+    { label:'Busiest Shift',    value: `${busyL}-Shift (${p(busyN)})`,               color: SHIFT_COLORS[busyL], bg: isDark?SHIFT_COLORS[busyL]+'22':'#f0f9ff' },
+    { label:'Top Checkpoint',   value: topCP.name,                                   color:'#0284C7', bg: isDark?'#0284C722':'#e0f2fe' },
+    { label:'LanIDs w/ 5+',     value: data.procs5.length,                           color:'#B45309', bg: isDark?'#B4530922':'#fef3c7' },
+  ].map(s => `<div class="stat-tile" style="background:${s.bg};border:1px solid ${s.color}30;">
+      <div class="s-label">${esc(s.label)}</div>
+      <div class="s-value" style="color:${s.color}">${esc(String(s.value))}</div>
+    </div>`).join('');
+
+  /* —— MONTH-OVER-MONTH —— */
+  const tealBg = isDark ? '#0D948822' : '#ccfbf1';
+  document.getElementById('mom-header').innerHTML = `
+    <span class="badge" style="color:#0D9488;background:${tealBg};">Trend</span>
+    <h2>Month-over-Month</h2>
+    <p>${prevKey ? `${monthLabel(mk)} vs. ${monthLabel(prevKey)}` : `${monthLabel(mk)} — earliest month on record`}</p>`;
+
+  if (prevData) {
+    const delta    = total - prevData.total;
+    const deltaPct = prevData.total ? ((delta / prevData.total) * 100).toFixed(1) : '0.0';
+    const dCol     = delta < 0 ? TREND_DOWN : delta > 0 ? TREND_UP : 'var(--text-muted)';
+    const arrow    = delta < 0 ? '↓' : delta > 0 ? '↑' : '→';
+    document.getElementById('mom-body').innerHTML = `
+      <div class="mom-row">
+        <div class="mom-col">
+          <div class="mc-label">${monthLabel(prevKey)}</div>
+          <div class="mc-val" style="color:var(--text-second)">${prevData.total}</div>
+        </div>
+        <div class="mom-arrow" style="color:${dCol}">${arrow}</div>
+        <div class="mom-col">
+          <div class="mc-label">${monthLabel(mk)}</div>
+          <div class="mc-val" style="color:var(--text-primary)">${total}</div>
+        </div>
+        <div class="mom-right">
+          <div class="mr-delta" style="color:${dCol}">${delta>0?'+':''}${delta} (${delta>0?'+':''}${deltaPct}%)</div>
+          <div class="mr-dir">${delta < 0 ? 'fewer errors' : 'more errors'}</div>
+        </div>
+      </div>`;
+  } else {
+    document.getElementById('mom-body').innerHTML =
+      `<p style="font-size:13px;color:var(--text-muted);margin-top:4px;">No prior month on record — comparison will appear starting next month.</p>`;
+  }
+
+  /* —— 3-MONTH ROLLING —— */
+  const r3Keys = MONTH_KEYS.slice(Math.max(0, selIdx - 2), selIdx + 1);
+  const r3     = r3Keys.map(k => ({ label: monthLabel(k), total: MONTHLY_DATA[k].total }));
+  const rIdx   = r3.length - 1;
+  const redBg  = isDark ? '#DC262622' : '#fee2e2';
+  document.getElementById('rolling-header').innerHTML = `
+    <span class="badge" style="color:#DC2626;background:${redBg};">Rolling Trend</span>
+    <h2>3-Month Rolling Review</h2>
+    <p>Total errors per calendar month (up to 3 months ending with selection)</p>`;
+
+  makeBarChart(r3.map(d => d.label), r3.map(d => d.total), rIdx);
+
+  document.getElementById('rolling-table').innerHTML = `
+    <thead><tr>
+      <th>Month</th><th class="r">Total</th><th class="r">Change</th>
+    </tr></thead>
+    <tbody>${r3.map((d, i) => {
+      const prev  = i > 0 ? r3[i-1].total : null;
+      const dlt   = prev !== null ? d.total - prev : null;
+      const dpct  = prev ? ((dlt / prev) * 100).toFixed(1) : (prev === 0 ? '0.0' : null);
+      const col   = dlt === null ? 'var(--text-muted)' : dlt > 0 ? TREND_UP : dlt < 0 ? TREND_DOWN : 'var(--text-muted)';
+      const chStr = dlt === null ? '—' : `${dlt>0?'+':''}${dlt} (${dlt>0?'+':''}${dpct}%)`;
+      return `<tr>
+        <td style="font-weight:${i===rIdx?800:600}">${esc(d.label)}</td>
+        <td class="r">${d.total}</td>
+        <td class="r" style="color:${col}">${chStr}</td>
+      </tr>`;
+    }).join('')}</tbody>`;
+
+  const avg = Math.round(r3.reduce((s,d) => s+d.total, 0) / r3.length);
+  document.getElementById('rolling-avg').innerHTML =
+    r3.length >= 2 ? `${r3.length}-month average: <strong>${avg}</strong> errors/month.` : '';
+
+  /* —— 6-MONTH RECEIVING-ONLY BY SHIFT —— */
+  const r6Keys = MONTH_KEYS.slice(Math.max(0, selIdx - 5), selIdx + 1);
+  const r6     = r6Keys.map(k => ({
+    label: monthLabel(k),
+    A: MONTHLY_DATA[k].recvShiftA,
+    B: MONTHLY_DATA[k].recvShiftB,
+    C: MONTHLY_DATA[k].recvShiftC,
+  }));
+  document.getElementById('recv-shift-header').innerHTML = `
+    <span class="badge" style="color:#0284C7;background:${isDark?'#0284C722':'#e0f2fe'};">By Shift · Receiving Only</span>
+    <h2>Receiving Processor Errors by Shift</h2>
+    <p>6 Month Receiving Home Department Errors</p>`;
+  makeShiftLineChart(r6.map(d => d.label), r6.map(d=>d.A), r6.map(d=>d.B), r6.map(d=>d.C));
+  document.getElementById('recv-shift-legend').innerHTML = ['A','B','C'].map(k => `
+    <div style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-second);font-weight:600;">
+      <span style="width:10px;height:10px;border-radius:5px;background:${SHIFT_COLORS[k]};display:inline-block;"></span>${k}-Shift
+    </div>`).join('');
+  document.getElementById('recv-shift-table').innerHTML = `
+    <thead><tr>
+      <th>Month</th>
+      <th class="r" style="color:${SHIFT_COLORS.A}">A</th>
+      <th class="r" style="color:${SHIFT_COLORS.B}">B</th>
+      <th class="r" style="color:${SHIFT_COLORS.C}">C</th>
+    </tr></thead>
+    <tbody>${r6.map((d,i) => `<tr>
+      <td style="font-weight:${i===r6.length-1?800:600}">${esc(d.label)}</td>
+      <td class="r" style="color:${SHIFT_COLORS.A}">${d.A}</td>
+      <td class="r" style="color:${SHIFT_COLORS.B}">${d.B}</td>
+      <td class="r" style="color:${SHIFT_COLORS.C}">${d.C}</td>
+    </tr>`).join('')}</tbody>`;
+
+  /* —— SHIFT DONUT —— */
+  makeDoughnut('chart-shift',
+    ['A-Shift','B-Shift','C-Shift'],
+    [data.shiftA, data.shiftB, data.shiftC],
+    [SHIFT_COLORS.A, SHIFT_COLORS.B, SHIFT_COLORS.C]
+  );
+  document.getElementById('shift-tiles').innerHTML = [
+    { name:'A-Shift', val: data.shiftA, color: SHIFT_COLORS.A },
+    { name:'B-Shift', val: data.shiftB, color: SHIFT_COLORS.B },
+    { name:'C-Shift', val: data.shiftC, color: SHIFT_COLORS.C },
+  ].map(s => `<div class="split-tile">
+    <div class="t-name">${s.name}</div>
+    <div class="t-count" style="color:${s.color}">${s.val}</div>
+    <div class="t-pct">${p(s.val)}</div>
+  </div>`).join('');
+
+  /* —— DEPT DONUT —— */
+  makeDoughnut('chart-dept',
+    ['Receiving','Transfers'],
+    [data.receiving, data.transfers],
+    ['#0EA5E9','#94A3B8']
+  );
+  document.getElementById('dept-tiles').innerHTML = [
+    { name:'Receiving',  val: data.receiving,  color:'#0EA5E9' },
+    { name:'Transfers',  val: data.transfers,   color:'#94A3B8' },
+  ].map(s => `<div class="split-tile">
+    <div class="t-name">${s.name}</div>
+    <div class="t-count" style="color:${s.color}">${s.val}</div>
+    <div class="t-pct">${p(s.val)}</div>
+  </div>`).join('');
+
+  /* —— CHECKPOINTS —— */
+  function renderCP(rows, label, isFirst) {
+    const sum = cpSum(rows);
+    const tableRows = rows.length
+      ? `<table>${rows.map(([name, val], i) => `<tr>
+          <td>${esc(name)}</td>
+          <td class="r">${val}</td>
+          <td class="m">${p(val)}</td>
+        </tr>`).join('')}</table>
+        <div class="cp-subtotal">
+          <span class="cp-sub-label">Checkpoint subtotal</span>
+          <span class="cp-sub-val">${sum} <span class="cp-sub-pct">(${p(sum)})</span></span>
+        </div>`
+      : `<div class="no-err">No errors logged at this checkpoint this month.</div>`;
+    return `<div class="cp-label" style="${isFirst?'margin-top:4px':''}">${esc(label)}</div>${tableRows}`;
+  }
+  document.getElementById('checkpoint-body').innerHTML =
+    renderCP(data.shipment, 'Shipment Error Check', true) +
+    renderCP(data.piece,    'Piece Error Check',    false) +
+    renderCP(data.carton,   'Carton Error Check',   false);
+
+  /* —— LANIDS 5+ —— */
+  const procSum = data.procs5.reduce((s,[,c]) => s+c, 0);
+  const amberBg = isDark ? '#B4530922' : '#fef3c7';
+  document.getElementById('procs-header').innerHTML = `
+    <span class="badge" style="color:#B45309;background:${amberBg};">Processors</span>
+    <h2>LanIDs with 5+ Errors</h2>
+    <p>${data.procs5.length} LanID${data.procs5.length!==1?'s':''} generated ${procSum} of the ${total} logged errors (${pct(procSum, total)}) this month</p>`;
+  document.getElementById('procs-table').innerHTML = data.procs5.length ? `
+    <thead><tr>
+      <th>LanID</th><th class="c">Shift</th><th class="r">Errors</th><th class="r">% of Total</th>
+    </tr></thead>
+    <tbody>${data.procs5.map(([name, count, shift]) => `<tr>
+      <td style="font-weight:600">${esc(name)}</td>
+      <td class="c"><span class="shift-badge" style="color:${SHIFT_COLORS[shift]};background:${SHIFT_COLORS[shift]}22;">${esc(shift)}</span></td>
+      <td class="r" style="color:#B45309">${count}</td>
+      <td class="m">${p(count)}</td>
+    </tr>`).join('')}</tbody>` : `<tbody><tr><td style="font-style:italic;color:var(--text-muted)">No LanIDs met the 5+ error threshold this month.</td></tr></tbody>`;
+
+  /* —— KEY TAKEAWAYS —— */
+  const takes = buildTakeaways(data, prevData, mk, prevKey);
+  document.getElementById('takeaways-body').innerHTML = takes.map(t => `
+    <div class="takeaway">
+      <h3>${esc(t.h)}</h3>
+      <p>${esc(t.b)}</p>
+    </div>`).join('');
+
+  /* —— SYNC STICKY NAV —— */
+  syncNav();
+}
+
+
+/* ============================================================
+   STICKY NAV
+   ============================================================ */
+function stepMonth(dir) {
+  const idx = MONTH_KEYS.indexOf(currentMonth);
+  const next = idx + dir;
+  if (next < 0 || next >= MONTH_KEYS.length) return;
+  currentMonth = MONTH_KEYS[next];
+  document.getElementById('month-select').value = currentMonth;
+  render();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function scrollToTop() {
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function syncNav() {
+  const idx = MONTH_KEYS.indexOf(currentMonth);
+  document.getElementById('nav-label').textContent = monthLabel(currentMonth);
+  document.getElementById('nav-prev').disabled = idx === 0;
+  document.getElementById('nav-next').disabled = idx === MONTH_KEYS.length - 1;
+}
+
+/* ============================================================
+   BOOT
+   ============================================================ */
+init();
+</script>
+</body>
+</html>
