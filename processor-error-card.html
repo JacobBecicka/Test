@@ -1,0 +1,1220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Processor Error Card · MWFC Receiving</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+/* ── CSS VARS — matches hub index.html exactly ───── */
+:root {
+  --bg:#0f1623; --surface:#1a2235; --surface2:#222d42; --border:#2e3f5c;
+  --accent:#38bdf8; --accent2:#0ea5e9; --text:#e2e8f0; --muted:#94a3b8;
+  --card-hover:#263550; --badge-bg:#1e3a5f; --badge-text:#7dd3fc;
+  --cp1:#0097A7; --cp2:#7C3AED; --cp3:#F59E0B;
+  --shift-a:#38BDF8; --shift-b:#A78BFA; --shift-c:#34D399;
+}
+[data-theme="light"] {
+  --bg:#f0f4f8; --surface:#ffffff; --surface2:#e8eef5; --border:#cbd5e1;
+  --accent:#0369a1; --accent2:#0284c7; --text:#1e293b; --muted:#64748b;
+  --card-hover:#dbeafe; --badge-bg:#dbeafe; --badge-text:#1d4ed8;
+}
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+body {
+  font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
+  background:var(--bg); color:var(--text);
+  min-height:100vh; transition:background .2s,color .2s;
+}
+
+/* ── LOADING / FALLBACK ─────────────────────────── */
+#v-loading {
+  display:flex; flex-direction:column; align-items:center;
+  justify-content:center; min-height:100vh; gap:14px;
+}
+.spin {
+  width:40px; height:40px; border:4px solid var(--border);
+  border-top-color:var(--accent); border-radius:50%;
+  animation:spin .8s linear infinite;
+}
+@keyframes spin { to { transform:rotate(360deg); } }
+#v-fallback {
+  display:none; flex-direction:column; align-items:center;
+  justify-content:center; min-height:100vh; padding:24px; gap:16px;
+}
+.drop-zone {
+  border:2px dashed var(--border); border-radius:16px; padding:40px 28px;
+  text-align:center; cursor:pointer; background:var(--surface);
+  max-width:400px; width:100%; display:flex; flex-direction:column;
+  align-items:center; gap:8px; transition:border-color .15s;
+}
+.drop-zone:hover { border-color:var(--accent); }
+
+/* ── HEADER — matches hub ───────────────────────── */
+header {
+  background:var(--surface); border-bottom:1px solid var(--border);
+  padding:.9rem 1.5rem; display:flex; align-items:center;
+  justify-content:space-between; position:sticky; top:0; z-index:10;
+  gap:12px; flex-wrap:wrap;
+}
+.header-left { display:flex; align-items:center; gap:.75rem; }
+.header-icon  { font-size:1.4rem; }
+.header-title { font-size:1rem; font-weight:700; line-height:1.2; }
+.header-sub   { font-size:.72rem; color:var(--muted); }
+
+/* ── BUTTONS ────────────────────────────────────── */
+/* Uniform Hub / Print / Theme buttons — same icon + label convention
+   used across the Weekly, Monthly, YTD, and Heat Map reports:
+   "← Hub", "🖨️ Print / Save PDF", "🌙 Dark" / "☀️ Light" */
+.btn {
+  background:var(--surface2); border:1px solid var(--border); border-radius:8px;
+  padding:.4rem .8rem; color:var(--text); font-size:.82rem; font-weight:600;
+  cursor:pointer; font-family:inherit; transition:background .15s,border-color .15s;
+  white-space:nowrap; text-decoration:none; display:inline-flex; align-items:center; gap:.35rem;
+}
+.btn:hover { background:var(--card-hover); border-color:var(--accent); }
+.btn-accent  { background:var(--accent); color:#fff; border-color:var(--accent); }
+.btn-accent:hover { background:var(--accent2); }
+
+/* ── PROC SELECTOR ──────────────────────────────── */
+.proc-sel {
+  background:var(--surface2); border:1px solid var(--border); border-radius:8px;
+  padding:.4rem .8rem; color:var(--text); font-size:.85rem; font-weight:700;
+  cursor:pointer; font-family:inherit; min-width:200px;
+}
+
+/* ── VIEWS ──────────────────────────────────────── */
+.view { display:none; }
+.view.active { display:block; }
+main { max-width:960px; margin:0 auto; padding:1.75rem 1.25rem 4rem; }
+
+/* ── SHARED SECTION LABEL ───────────────────────── */
+.sec-lbl {
+  font-size:11px; font-weight:700; text-transform:uppercase;
+  letter-spacing:.08em; color:var(--muted); margin-bottom:12px; margin-top:4px;
+}
+
+/* ── OVERVIEW-SPECIFIC STYLES (from original) ───── */
+.eyebrow {
+  font-size:11px; color:var(--muted); font-weight:700;
+  text-transform:uppercase; letter-spacing:.08em; margin-bottom:4px;
+}
+.ov-hdr {
+  display:flex; justify-content:space-between; align-items:flex-start;
+  flex-wrap:wrap; gap:12px; margin-bottom:20px;
+}
+.ov-hdr h1 { font-size:22px; font-weight:800; }
+.ov-hdr-sub { font-size:12px; color:var(--muted); margin-top:3px; }
+
+/* Stat grid (overview) */
+.stat-grid { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:20px; }
+.s-card {
+  background:var(--surface); border:1px solid var(--border); border-radius:10px;
+  padding:14px 18px; flex:1; min-width:110px;
+}
+.s-lbl { font-size:10px; color:var(--muted); font-weight:700;
+  text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }
+.s-val { font-size:26px; font-weight:900; line-height:1; }
+.s-sub { font-size:11px; color:var(--muted); margin-top:4px; }
+
+/* Select banner */
+.sel-banner {
+  background:var(--surface); border:2px solid var(--accent);
+  border-radius:12px; padding:14px 18px; margin-bottom:20px;
+  display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+}
+.sel-lbl {
+  font-size:12px; font-weight:700; color:var(--muted);
+  text-transform:uppercase; letter-spacing:.05em; white-space:nowrap;
+}
+
+/* Chart cards (overview) */
+.chart-card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:12px; padding:16px 18px;
+}
+.ct { font-size:12px; font-weight:700; color:var(--muted);
+  text-transform:uppercase; letter-spacing:.05em; margin-bottom:2px; }
+.cs { font-size:10px; color:var(--muted); margin-bottom:12px; }
+.ch-wrap { position:relative; }
+.row { display:flex; gap:16px; flex-wrap:wrap; margin-bottom:20px; }
+.mb20 { margin-bottom:20px; }
+
+/* ── DETAIL-SPECIFIC STYLES ─────────────────────── */
+.card-box {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:14px; padding:20px 22px; margin-bottom:22px;
+}
+.card-box-sm { padding:16px 18px; margin-bottom:0; }
+.stats-row { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+.stat-card {
+  flex:1 1 130px; min-width:120px; background:var(--surface);
+  border:1px solid var(--border); border-radius:12px; padding:14px 16px;
+}
+.stat-lbl { font-size:10px; font-weight:700; color:var(--muted);
+  text-transform:uppercase; letter-spacing:.07em; margin-bottom:6px; }
+.stat-val { font-size:22px; font-weight:900; line-height:1; }
+.stat-sub { font-size:11px; color:var(--muted); margin-top:5px; }
+.impact-card {
+  flex:1 1 130px; min-width:120px; background:var(--surface);
+  border-top:1px solid var(--border); border-right:1px solid var(--border);
+  border-bottom:1px solid var(--border); border-left:4px solid #D97706;
+  border-radius:12px; padding:14px 16px;
+}
+.chart-row { display:flex; gap:16px; flex-wrap:wrap; margin-bottom:22px; }
+.chart-col-sm { flex:1 1 220px; min-width:200px; }
+.chart-col-lg { flex:1 1 300px; min-width:280px; }
+
+/* Processor identity header */
+.proc-hdr { display:flex; align-items:center; gap:14px; margin-bottom:20px; flex-wrap:wrap; }
+.proc-avatar {
+  width:52px; height:52px; border-radius:50%; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  font-size:22px; font-weight:900; color:#0f172a;
+}
+.proc-meta-name { font-size:22px; font-weight:900; line-height:1.1; margin-bottom:4px; }
+.proc-meta-sub  { font-size:12px; color:var(--muted); }
+
+/* CP legend */
+.cp-legend { display:flex; gap:14px; flex-wrap:wrap; margin-bottom:12px; }
+.cp-dot { width:10px; height:10px; border-radius:2px; display:inline-block; }
+
+/* Checkpoint summary cards */
+.cp-cards { display:flex; gap:14px; flex-wrap:wrap; margin-bottom:22px; }
+.cp-card {
+  flex:1 1 210px; min-width:200px; background:var(--surface);
+  border:1px solid var(--border); border-radius:14px; padding:16px 18px;
+}
+.cp-card-hdr { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+.cp-dot-lg { width:10px; height:10px; border-radius:50%; display:inline-block; flex-shrink:0; }
+.cp-card-name  { font-weight:700; font-size:14px; }
+.cp-card-count { margin-left:auto; font-size:22px; font-weight:900; }
+.cp-trend-row {
+  display:flex; justify-content:space-between; font-size:12px; color:var(--muted);
+  padding-bottom:10px; border-bottom:1px solid var(--border); margin-bottom:6px;
+}
+.subtype-lbl { font-size:10px; font-weight:700; letter-spacing:.06em;
+  text-transform:uppercase; color:var(--muted); margin-bottom:4px; }
+.subtype-tbl { width:100%; border-collapse:collapse; font-size:12px; margin-top:6px; }
+.subtype-tbl th { text-align:left; color:var(--muted); font-weight:600;
+  padding-bottom:5px; border-bottom:1px solid var(--border); font-size:11px; }
+.subtype-tbl th.r { text-align:right; min-width:44px; }
+.subtype-tbl td { padding:5px 8px 5px 0; color:var(--text); line-height:1.4; }
+.subtype-tbl td.r { text-align:right; padding:5px 0; color:var(--muted); min-width:44px; }
+.subtype-tbl td.c { text-align:right; padding:5px 0; color:var(--text); min-width:44px; }
+.subtype-tbl tr { border-bottom:1px solid var(--border); }
+.subtype-tbl tr:last-child { border-bottom:none; }
+.no-data-italic { font-size:12px; color:var(--muted); font-style:italic; padding:6px 0; }
+
+/* Error log */
+.log-hdr { display:flex; justify-content:space-between; align-items:center;
+  margin-bottom:14px; flex-wrap:wrap; gap:8px; }
+.log-hdr-title { font-size:13px; font-weight:700; }
+.flt-row { display:flex; gap:6px; }
+.flt-btn {
+  padding:5px 13px; border-radius:7px; border:1px solid var(--border);
+  background:transparent; color:var(--muted); font-size:11px; font-weight:700;
+  cursor:pointer; font-family:inherit; transition:all .15s;
+}
+.log-scroll { max-height:460px; overflow-y:auto; }
+.log-entry { border-bottom:1px solid var(--border); padding:11px 0;
+  display:flex; gap:14px; align-items:flex-start; }
+.log-wk { min-width:58px; flex-shrink:0; }
+.log-wk-num { font-size:12px; font-weight:800; }
+.log-wk-dt  { font-size:10px; color:var(--muted); margin-top:1px; }
+.log-body-inner { flex:1; min-width:0; }
+.log-badges { display:flex; gap:5px; flex-wrap:wrap; margin-bottom:6px; }
+.cp-badge {
+  display:inline-flex; align-items:center; gap:3px;
+  font-size:10px; font-weight:700; border-radius:5px; padding:3px 8px;
+  white-space:nowrap; letter-spacing:.02em;
+}
+.log-comment { font-size:12px; line-height:1.55; margin-bottom:5px; }
+.log-meta { font-size:10px; color:var(--muted); }
+.log-meta b { color:var(--muted); font-weight:600; }
+
+/* Responsive */
+@media(max-width:560px){
+  .chart-row,.cp-cards,.row { flex-direction:column; }
+  .proc-hdr { gap:10px; }
+  main { padding:1.25rem 1rem 3rem; }
+}
+footer { text-align:center; padding:1.5rem; font-size:.75rem;
+  color:var(--muted); border-top:1px solid var(--border); }
+
+/* ===================== PRINT ===================== */
+@media print {
+  body { background:#fff !important; }
+  .no-print { display:none !important; }
+  header { position:static !important; }
+  .card-box, .cp-card, .s-card, .stat-card, .impact-card, .chart-card {
+    box-shadow:none !important; break-inside:avoid; page-break-inside:avoid;
+  }
+}
+</style>
+</head>
+<body data-theme="dark">
+
+<!-- ══ LOADING ═══════════════════════════════════════════ -->
+<div id="v-loading">
+  <div class="spin"></div>
+  <div style="font-size:14px;font-weight:600;color:var(--muted)">Loading error data…</div>
+  <div id="load-msg" style="font-size:12px;color:var(--muted)">Fetching from GitHub…</div>
+</div>
+
+<!-- ══ FALLBACK ═══════════════════════════════════════════ -->
+<div id="v-fallback">
+  <div style="display:flex;justify-content:space-between;align-items:center;width:100%;max-width:600px;margin-bottom:24px">
+    <div>
+      <div class="eyebrow">Receiving Research</div>
+      <div style="font-size:22px;font-weight:800">Processor Error Card</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn" onclick="goHub()">← Hub</button>
+      <button class="btn" onclick="window.print()">🖨️ Print / Save PDF</button>
+      <button class="btn" onclick="toggleTheme()" id="fb-theme-btn">☀️ Light</button>
+    </div>
+  </div>
+  <div style="font-size:40px;margin-bottom:8px">📊</div>
+  <div style="font-size:15px;font-weight:700;margin-bottom:6px">Auto-load failed</div>
+  <div id="fallback-msg" style="font-size:12px;color:var(--muted);margin-bottom:24px;text-align:center;max-width:380px"></div>
+  <label class="drop-zone">
+    <input type="file" accept=".xlsx" style="display:none" onchange="loadFile(this.files[0])">
+    <div style="font-size:32px;margin-bottom:4px">📁</div>
+    <div style="font-size:14px;font-weight:700;margin-bottom:4px">Drop .xlsx file here</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:14px">AI_Safe_Weekly_Error_Data.xlsx</div>
+    <div class="btn btn-accent">Browse Files</div>
+  </label>
+  <button class="btn" onclick="goHub()" style="margin-top:8px">← Back to Hub</button>
+</div>
+
+<!-- ══ HEADER ═════════════════════════════════════════════ -->
+<header id="app-header" style="display:none">
+  <div class="header-left">
+    <span class="header-icon">📦</span>
+    <div>
+      <div class="header-title">MWFC Receiving Error Dashboard</div>
+      <div class="header-sub" id="hdr-sub">Processor Error Cards</div>
+    </div>
+  </div>
+  <div class="no-print" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <button class="btn" onclick="goHub()">← Hub</button>
+    <button class="btn" id="btn-ov" onclick="showView('ov')" style="display:none">← Overview</button>
+    <select class="proc-sel" id="hdr-proc-sel" style="display:none" onchange="onSelChange(this.value)"></select>
+    <label style="cursor:pointer">
+      <span class="btn">📂 Load File</span>
+      <input type="file" accept=".xlsx" style="display:none" onchange="loadFile(this.files[0])">
+    </label>
+    <button class="btn" onclick="window.print()">🖨️ Print / Save PDF</button>
+    <button class="btn" id="theme-btn" onclick="toggleTheme()">☀️ Light</button>
+  </div>
+</header>
+
+<!-- ══ OVERVIEW VIEW ══════════════════════════════════════ -->
+<div id="v-ov" class="view">
+  <main>
+    <div class="ov-hdr">
+      <div>
+        <div class="eyebrow">Receiving Research</div>
+        <h1>Department Overview</h1>
+        <div class="ov-hdr-sub" id="ov-sub"></div>
+      </div>
+    </div>
+
+    <!-- Dept-wide stat cards -->
+    <div class="stat-grid" id="ov-stats"></div>
+
+    <!-- LanID selector banner — no processor data shown until clicked -->
+    <div class="sel-banner">
+      <span class="sel-lbl">View Processor Card</span>
+      <select class="proc-sel" id="ov-sel">
+        <option value="">&#8212; Select a LanID &#8212;</option>
+      </select>
+      <button class="btn btn-accent" onclick="gotoDetail()">View Card &#8594;</button>
+    </div>
+
+    <!-- Weekly stacked chart — all processors combined -->
+    <div class="chart-card mb20">
+      <div class="ct">Checkpoint Errors by Week — All Processors</div>
+      <div class="cs" id="ov-weekly-sub">Stacked by CP1 · CP2 · CP3</div>
+      <div class="ch-wrap" style="height:190px"><canvas id="ch-ov-weekly"></canvas></div>
+    </div>
+
+    <!-- Top error types per checkpoint (3 charts) -->
+    <div class="sec-lbl">Top Error Types by Checkpoint — Dept-Wide</div>
+    <div class="row">
+      <div class="chart-card" style="flex:1;min-width:220px">
+        <div class="ct" style="color:var(--cp1)">CP1 — Shipment</div>
+        <div class="cs">Top error types · dept-wide</div>
+        <div class="ch-wrap" style="height:190px"><canvas id="ch-ov-cp1"></canvas></div>
+      </div>
+      <div class="chart-card" style="flex:1;min-width:220px">
+        <div class="ct" style="color:var(--cp2)">CP2 — Piece</div>
+        <div class="cs">Top error types · dept-wide</div>
+        <div class="ch-wrap" style="height:190px"><canvas id="ch-ov-cp2"></canvas></div>
+      </div>
+      <div class="chart-card" style="flex:1;min-width:220px">
+        <div class="ct" style="color:var(--cp3)">CP3 — Carton</div>
+        <div class="cs">Top error types · dept-wide</div>
+        <div class="ch-wrap" style="height:190px"><canvas id="ch-ov-cp3"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Dept-wide checkpoint summary cards (same style as individual processor cards) -->
+    <div class="sec-lbl">Checkpoint Summary &amp; Error Sub-Classifications — All Processors</div>
+    <div class="cp-cards" id="ov-cp-cards"></div>
+  </main>
+</div>
+</div>
+
+<!-- ══ DETAIL VIEW ════════════════════════════════════════ -->
+<div id="v-det" class="view">
+  <main>
+
+    <!-- Processor Identity Header -->
+    <div class="proc-hdr" id="det-hdr"></div>
+
+    <!-- Summary stat cards -->
+    <div class="stats-row" id="det-stats"></div>
+
+    <!-- Impact stat cards -->
+    <div class="stats-row" id="det-impact" style="margin-bottom:24px"></div>
+
+    <!-- Weekly Stacked Bar -->
+    <div class="sec-lbl">Weekly Error Frequency (by Checkpoint)</div>
+    <div class="card-box">
+      <div class="ch-wrap" style="height:240px"><canvas id="ch-weekly"></canvas></div>
+    </div>
+
+    <!-- Trend Line -->
+    <div class="sec-lbl">Overall Trend Line</div>
+    <div class="card-box">
+      <div id="trend-sub" style="font-size:12px;color:var(--muted);margin-bottom:12px"></div>
+      <div class="ch-wrap" style="height:170px"><canvas id="ch-trend"></canvas></div>
+    </div>
+
+    <!-- Checkpoint Flags + Top Error Types -->
+    <div class="chart-row">
+      <div class="chart-col-sm">
+        <div class="sec-lbl">Checkpoint Flags</div>
+        <div class="card-box card-box-sm">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:14px">Total flags per checkpoint</div>
+          <div class="ch-wrap" style="height:200px"><canvas id="ch-cpflags"></canvas></div>
+        </div>
+      </div>
+      <div class="chart-col-lg">
+        <div class="sec-lbl">Top Error Types by Checkpoint Flag</div>
+        <div class="card-box card-box-sm">
+          <div class="cp-legend">
+            <div style="display:flex;align-items:center;gap:5px"><span class="cp-dot" style="background:var(--cp1)"></span><span style="font-size:10px;font-weight:700;color:var(--muted)">CP1</span></div>
+            <div style="display:flex;align-items:center;gap:5px"><span class="cp-dot" style="background:var(--cp2)"></span><span style="font-size:10px;font-weight:700;color:var(--muted)">CP2</span></div>
+            <div style="display:flex;align-items:center;gap:5px"><span class="cp-dot" style="background:var(--cp3)"></span><span style="font-size:10px;font-weight:700;color:var(--muted)">CP3</span></div>
+          </div>
+          <div class="ch-wrap" id="ch-toperr-wrap"><canvas id="ch-toperr"></canvas></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Checkpoint Summary + Sub-type tables -->
+    <div class="sec-lbl">Checkpoint Summary &amp; Error Sub-Classifications</div>
+    <div class="cp-cards" id="cp-cards"></div>
+
+    <!-- Error Log -->
+    <div class="sec-lbl">Assessed Error Log</div>
+    <div class="card-box" style="margin-bottom:0">
+      <div class="log-hdr">
+        <div class="log-hdr-title" id="log-title">Loading…</div>
+        <div class="flt-row no-print" id="log-filters">
+          <button class="flt-btn on" onclick="setLogFlt('All',this)">All</button>
+          <button class="flt-btn"    onclick="setLogFlt('CP1',this)">CP1</button>
+          <button class="flt-btn"    onclick="setLogFlt('CP2',this)">CP2</button>
+          <button class="flt-btn"    onclick="setLogFlt('CP3',this)">CP3</button>
+        </div>
+      </div>
+      <div class="log-scroll" id="log-body"></div>
+    </div>
+
+  </main>
+  <footer id="det-footer">
+    Processor Error Card &nbsp;·&nbsp; MWFC Receiving Operations &nbsp;·&nbsp; Nordstrom
+  </footer>
+</div>
+
+<script>
+// =============================================================================
+// CONSTANTS
+// =============================================================================
+const XLSX_URL  = "https://raw.githubusercontent.com/JacobBecicka/Test/main/AI_Safe_Weekly_Error_Data.xlsx";
+const HUB_URL   = "index.html";
+
+// Sheets are named directly with their fiscal week, e.g. "FW6 26", "FW48 25"
+// — the sheet name IS the fiscal week/year, so there's no calendar-week
+// offset math needed anymore (previously: XLSX "Week N" -> Tool FW N-5).
+const FW_SHEET_RE = /^FW\s*(\d+)\s+(\d+)$/i;
+
+// FW1 calendar anchor — used only as a last-resort fallback when a fiscal
+// week has no usable row dates to derive its own range from. Real ranges
+// are computed live from the dates found in each sheet (see
+// deriveDateRanges()), so this only matters for a completely blank week.
+const FW1_START = new Date(2025, 11, 28); // matches the earliest sheet, FW48 '25
+
+const SHIFT_COLORS = { "A-Shift":"#38BDF8","B-Shift":"#A78BFA","C-Shift":"#34D399" };
+const CP_VIZ = { CP1:"#0097A7",CP2:"#7C3AED",CP3:"#F59E0B" };
+const CP_BADGE_CSS = {
+  CP1:"background:rgba(0,151,167,.15);color:#0097A7;border:1px solid rgba(0,151,167,.35)",
+  CP2:"background:rgba(124,58,237,.15);color:#A78BFA;border:1px solid rgba(124,58,237,.35)",
+  CP3:"background:rgba(245,158,11,.15);color:#D97706;border:1px solid rgba(245,158,11,.35)",
+};
+
+// =============================================================================
+// STATE
+// =============================================================================
+let _data={}, _cur=null, _logFlt="All", _dark=true, _ch={};
+let NUM_WEEKS = 0;          // total fiscal weeks detected in the workbook (dynamic)
+let FW_DATE_RANGES = {};    // computed live from the workbook — see deriveDateRanges()
+let FW_LABELS = {};         // seq (1..NUM_WEEKS) -> display label, e.g. "FW6 '26"
+
+// =============================================================================
+// HELPERS
+// =============================================================================
+const goHub = ()=>window.location.href=HUB_URL;
+const isNoErr=v=>{const s=String(v||"").trim().toLowerCase().replace(/\xa0/g,"");return!s||s==="no errors"||s==="no error"||s==="none";};
+const isFYI  =c=>/\bfyi\b|fyi only|not an error/i.test(c||"");
+function clean(v){if(v==null)return"";let s=String(v).trim().replace(/\xa0/g,"");if(/^no\s+errors?$/i.test(s))s="";return s;}
+function parseNum(v){const m=String(v||"").match(/\d+/);return m?+m[0]:0;}
+function trunc(s,n=25){return s.length>n?s.slice(0,n-1)+"…":s;}
+function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function fwLbl(seq){ return FW_LABELS[seq] || `FW${seq}`; }
+function fwRangeLabel(){ return NUM_WEEKS ? `${fwLbl(1)} – ${fwLbl(NUM_WEEKS)}` : ""; }
+
+// Alphabetical comparator for LanIDs — used for all processor dropdowns.
+// Applies automatically to any new LanID added to the workbook in the future.
+const byLanidAlpha = (a,b)=>a.lanid.localeCompare(b.lanid,undefined,{numeric:true,sensitivity:"base"});
+
+function linSlope(weekly,key){
+  const n=weekly.length,xs=weekly.map(w=>w.fw),ys=weekly.map(w=>w[key]||0);
+  const xm=xs.reduce((a,b)=>a+b,0)/n,ym=ys.reduce((a,b)=>a+b,0)/n;
+  let num=0,den=0;
+  for(let i=0;i<n;i++){num+=(xs[i]-xm)*(ys[i]-ym);den+=(xs[i]-xm)**2;}
+  return den===0?0:num/den;
+}
+function trendLabel(s){
+  if(s<-0.03)return{text:"Declining ↓",color:"#10b981"};
+  if(s> 0.03)return{text:"Increasing ↑",color:"#ef4444"};
+  return{text:"Flat →",color:"#94a3b8"};
+}
+const shiftColor =sh=>SHIFT_COLORS[sh]||"#38BDF8";
+const shiftLetter=sh=>(sh||"A").charAt(0);
+
+// Theme-aware color getters
+const gc=()=>_dark?"#8b949e":"#64748b";
+const gb=()=>_dark?"#2e3f5c":"#cbd5e1";
+const gt=()=>_dark?"#e2e8f0":"#1e293b";
+const gAccent=()=>_dark?"#38bdf8":"#0369a1";
+
+// HTML helper for overview stat cards (with left-border accent)
+function statCard(label,value,sub,color){
+  return`<div class="s-card" style="border-left:4px solid ${color}">
+    <div class="s-lbl">${label}</div>
+    <div class="s-val" style="color:${color}">${value}</div>
+    <div class="s-sub">${sub}</div>
+  </div>`;
+}
+
+const MONTH_ABBR=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function fmtMD(d){ return `${MONTH_ABBR[d.getMonth()]} ${d.getDate()}`; }
+function fmtRange(minD,maxD){
+  if(!minD) return "";
+  if(!maxD || minD.getTime()===maxD.getTime()) return fmtMD(minD);
+  if(minD.getMonth()===maxD.getMonth()) return `${MONTH_ABBR[minD.getMonth()]} ${minD.getDate()}–${maxD.getDate()}`;
+  return `${fmtMD(minD)}–${fmtMD(maxD)}`;
+}
+
+// =============================================================================
+// XLSX PARSING
+// Sheets are matched directly on the "FW<n> <yy>" naming pattern and sorted
+// chronologically (fiscal year, then fiscal week). Each sheet is then given
+// a sequential index (1..N) across the whole workbook — that sequential
+// index is what drives the weekly arrays/charts internally, while the
+// original "FW<n> '<yy>" text is kept as a display label (FW_LABELS) since
+// fiscal week numbers reset every year and would otherwise collide.
+// =============================================================================
+function parseWB(wb){
+  const records=[];
+
+  const sheetMeta=[];
+  for(const sn of wb.SheetNames){
+    const m=sn.match(FW_SHEET_RE);
+    if(!m) continue;
+    sheetMeta.push({ sheet:sn, fw:+m[1], yy:+m[2] });
+  }
+  sheetMeta.sort((a,b)=>(a.yy-b.yy)||(a.fw-b.fw));
+
+  const seqOf={}, labelOf={};
+  sheetMeta.forEach((m,i)=>{
+    seqOf[m.sheet]=i+1;
+    labelOf[m.sheet]=`FW${m.fw} '${m.yy}`;
+  });
+  FW_LABELS = Object.fromEntries(sheetMeta.map((m,i)=>[i+1, labelOf[m.sheet]]));
+
+  for(const {sheet:sn} of sheetMeta){
+    const seq=seqOf[sn];
+    const ws=wb.Sheets[sn];
+    const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+    let hi=-1;
+    for(let i=0;i<rows.length;i++){if(String(rows[i][0]).trim()==="Id"){hi=i;break;}}
+    if(hi===-1) continue;
+
+    for(let i=hi+1;i<rows.length;i++){
+      const row=rows[i];
+      if(!row[0]) continue;
+      const lanid=clean(row[6]).replace(/\xa0/g,"");
+      if(!lanid||lanid.toLowerCase()==="none") continue;
+
+      const cp1Raw=clean(row[11]),cp2Raw=clean(row[12]),cp3Raw=clean(row[13]);
+      const comment=clean(row[18]).slice(0,300);
+
+      // Split on semicolons — each sub-type = 1 separate CP flag
+      const cp1Parts=(!cp1Raw||isNoErr(cp1Raw))?[]:cp1Raw.split(";").map(s=>s.trim()).filter(Boolean);
+      const cp2Parts=(!cp2Raw||isNoErr(cp2Raw))?[]:cp2Raw.split(";").map(s=>s.trim()).filter(Boolean);
+      const cp3Parts=(!cp3Raw||isNoErr(cp3Raw))?[]:cp3Raw.split(";").map(s=>s.trim()).filter(Boolean);
+
+      const allCPs=[
+        ...cp1Parts.map(type=>({cp:"CP1",type})),
+        ...cp2Parts.map(type=>({cp:"CP2",type})),
+        ...cp3Parts.map(type=>({cp:"CP3",type})),
+      ];
+
+      // Date — handle Date objects and Excel serial numbers
+      const dv=row[8]; let dateStr="", dateObj=null;
+      if(dv instanceof Date){ dateObj=dv; dateStr=dv.toISOString().slice(0,10); }
+      else if(dv){
+        const s=String(dv).trim();
+        if(/^\d{4}-\d{2}-\d{2}/.test(s)){ dateStr=s.slice(0,10); dateObj=new Date(dateStr+"T00:00:00"); }
+        else if(/^\d{5}$/.test(s)){
+          dateObj=new Date((+s-25569)*86400000);
+          dateStr=dateObj.toISOString().slice(0,10);
+        }
+      }
+
+      // Shift normalization — skip rows without a valid shift (matches YTD report)
+      const sr=clean(row[9]).replace(/\xa0/g,"").trim();
+      let shift=null;
+      if(/^A(-?Shift)?$/i.test(sr)) shift="A-Shift";
+      else if(/^B(-?Shift)?$/i.test(sr)) shift="B-Shift";
+      else if(/^C(-?Shift)?$/i.test(sr)) shift="C-Shift";
+      if(!shift) continue;
+
+      records.push({
+        fw:seq, fwLabel:labelOf[sn], lanid,name:clean(row[5])||lanid,
+        shift,dept:clean(row[10])||"Receiving",dateStr,dateObj,comment,
+        cp1Parts,cp2Parts,cp3Parts,allCPs,
+        casesRaw:clean(row[16]),unitsRaw:clean(row[17]),
+        units:parseNum(row[17]),cases:parseNum(row[16]),
+        fyi:isFYI(comment),
+      });
+    }
+  }
+  return records;
+}
+
+// Derive each fiscal week's display date range from the actual row dates
+// found in that week's records. Falls back to a calculated 7-day window
+// off FW1_START only if a week has no usable dates at all (e.g. blank sheet).
+function deriveDateRanges(records,numWeeks){
+  const bounds={};
+  for(const r of records){
+    if(!r.dateObj) continue;
+    const b=bounds[r.fw]||(bounds[r.fw]={min:r.dateObj,max:r.dateObj});
+    if(r.dateObj<b.min) b.min=r.dateObj;
+    if(r.dateObj>b.max) b.max=r.dateObj;
+  }
+  const out={};
+  for(let fw=1;fw<=numWeeks;fw++){
+    if(bounds[fw]){
+      out[fw]=fmtRange(bounds[fw].min,bounds[fw].max);
+    }else{
+      const start=new Date(FW1_START.getTime()+(fw-1)*7*86400000);
+      const end=new Date(start.getTime()+6*86400000);
+      out[fw]=fmtRange(start,end);
+    }
+  }
+  return out;
+}
+
+function buildProcessorData(allRecords){
+  // Determine how many fiscal weeks exist in this workbook — dynamic, no cap.
+  NUM_WEEKS = allRecords.reduce((max,r)=>Math.max(max,r.fw),0);
+  FW_DATE_RANGES = deriveDateRanges(allRecords,NUM_WEEKS);
+
+  const byLanid={};
+  for(const r of allRecords){
+    if(!byLanid[r.lanid]) byLanid[r.lanid]=[];
+    byLanid[r.lanid].push(r);
+  }
+  const result={};
+  for(const[lanid,records] of Object.entries(byLanid)){
+    const weekly=Array.from({length:NUM_WEEKS},(_,i)=>{
+      const fw=i+1;
+      return{fw,dateRange:FW_DATE_RANGES[fw]||"",
+        shipment:0,piece:0,carton:0,total:0,
+        shipTypes:{},pieceTypes:{},cartonTypes:{}};
+    });
+    const rawLog=[];
+    let incidents=0,totalUnits=0,totalCases=0;
+
+    for(const r of records){
+      const w=weekly[r.fw-1];
+      // CP flags — ALL records (FYI included per spec)
+      r.cp1Parts.forEach(t=>{w.shipment++;w.shipTypes[t]=(w.shipTypes[t]||0)+1;});
+      r.cp2Parts.forEach(t=>{w.piece++;   w.pieceTypes[t]=(w.pieceTypes[t]||0)+1;});
+      r.cp3Parts.forEach(t=>{w.carton++;  w.cartonTypes[t]=(w.cartonTypes[t]||0)+1;});
+      w.total=w.shipment+w.piece+w.carton;
+
+      // Incidents — non-FYI only
+      if(!r.fyi){
+        incidents++; totalUnits+=r.units; totalCases+=r.cases;
+        rawLog.push({fw:r.fw,fwLabel:r.fwLabel,date:r.dateStr,cps:r.allCPs,
+          comment:r.comment,casesRaw:r.casesRaw,unitsRaw:r.unitsRaw});
+      }
+    }
+    rawLog.sort((a,b)=>b.fw-a.fw||b.date.localeCompare(a.date));
+
+    const tot={shipment:0,piece:0,carton:0,shipTypes:{},pieceTypes:{},cartonTypes:{}};
+    for(const w of weekly){
+      tot.shipment+=w.shipment; tot.piece+=w.piece; tot.carton+=w.carton;
+      for(const[k,v] of Object.entries(w.shipTypes))   tot.shipTypes[k]  =(tot.shipTypes[k]  ||0)+v;
+      for(const[k,v] of Object.entries(w.pieceTypes))  tot.pieceTypes[k] =(tot.pieceTypes[k] ||0)+v;
+      for(const[k,v] of Object.entries(w.cartonTypes)) tot.cartonTypes[k]=(tot.cartonTypes[k]||0)+v;
+    }
+    tot.overall=tot.shipment+tot.piece+tot.carton;
+
+    const vote=key=>{const m={};records.forEach(r=>{m[r[key]]=(m[r[key]]||0)+1;});return Object.entries(m).sort((a,b)=>b[1]-a[1])[0]?.[0]||"";};
+    const shift=vote("shift")||"A-Shift", name=vote("name")||lanid, dept=vote("dept")||"Receiving";
+    const activeWeeks=weekly.filter(w=>w.total>0).length;
+
+    result[lanid]={lanid,name,shift,dept,incidents,activeWeeks,totalUnits,totalCases,weekly,rawLog,totals:tot};
+  }
+  return result;
+}
+
+// =============================================================================
+// LOADING
+// =============================================================================
+function setLoading(msg){
+  document.getElementById("v-loading").style.display="flex";
+  document.getElementById("v-fallback").style.display="none";
+  document.getElementById("app-header").style.display="none";
+  document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
+  document.getElementById("load-msg").textContent=msg||"";
+}
+function showFallback(msg){
+  document.getElementById("v-loading").style.display="none";
+  document.getElementById("v-fallback").style.display="flex";
+  document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
+  document.getElementById("fallback-msg").textContent=msg;
+}
+async function autoLoad(){
+  setLoading("Fetching from GitHub…");
+  try{
+    const res=await fetch(XLSX_URL);
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    document.getElementById("load-msg").textContent="Parsing workbook…";
+    const wb=XLSX.read(await res.arrayBuffer(),{type:"array",cellDates:true});
+    const recs=parseWB(wb);
+    if(!recs.length) throw new Error("No fiscal-week data found in workbook.");
+    _data=buildProcessorData(recs);
+    init();
+  }catch(e){ showFallback(e.message); }
+}
+async function loadFile(file){
+  if(!file) return;
+  setLoading("Parsing file…");
+  try{
+    const wb=XLSX.read(await file.arrayBuffer(),{type:"array",cellDates:true});
+    const recs=parseWB(wb);
+    if(!recs.length) throw new Error("No fiscal-week data found. Verify sheet names are 'FW<n> <yy>'.");
+    _data=buildProcessorData(recs);
+    init();
+  }catch(e){ showFallback(e.message); }
+}
+function init(){
+  document.getElementById("v-loading").style.display="none";
+  document.getElementById("app-header").style.display="flex";
+  // Populate header selector — alphabetical by LanID
+  const hSel=document.getElementById("hdr-proc-sel");
+  const sorted=Object.values(_data).sort(byLanidAlpha);
+  hSel.innerHTML=sorted.map(p=>`<option value="${p.lanid}">${p.lanid}</option>`).join("");
+  // Footer reflects actual detected week range
+  document.getElementById("det-footer").innerHTML=
+    `Processor Error Card &nbsp;·&nbsp; MWFC Receiving Operations &nbsp;·&nbsp; ${fwRangeLabel()} &nbsp;·&nbsp; Nordstrom`;
+  renderOverview();
+  showView("ov");
+}
+
+// =============================================================================
+// VIEW CONTROL
+// =============================================================================
+function showView(name){
+  document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
+  document.getElementById("v-"+name).classList.add("active");
+  const isDet=name==="det";
+  document.getElementById("btn-ov").style.display=isDet?"":"none";
+  document.getElementById("hdr-proc-sel").style.display=isDet?"":"none";
+  document.getElementById("hdr-sub").textContent=isDet&&_cur
+    ?`Processor Error Card · ${_data[_cur]?.name||_cur}`
+    :"Processor Error Cards";
+}
+function onSelChange(lanid){ if(lanid&&_data[lanid]) renderDetail(lanid); }
+function gotoDetail(){
+  const v=document.getElementById("ov-sel").value;
+  if(v&&_data[v]){ renderDetail(v); showView("det"); }
+}
+
+// =============================================================================
+// OVERVIEW RENDERING  (original layout — no processor data until clicked)
+// =============================================================================
+function renderOverview(){
+  const procs=Object.values(_data);
+
+  // Dept-wide aggregates
+  let totalIncidents=0,totalCP1=0,totalCP2=0,totalCP3=0;
+  const activeWeekSet=new Set();
+  for(const p of procs){
+    totalIncidents+=p.incidents; totalCP1+=p.totals.shipment;
+    totalCP2+=p.totals.piece;   totalCP3+=p.totals.carton;
+    p.weekly.forEach(w=>{if(w.total>0) activeWeekSet.add(w.fw);});
+  }
+  const navy=gAccent();
+
+  document.getElementById("ov-sub").textContent=
+    `All processors · ${fwRangeLabel()}`;
+  document.getElementById("ov-weekly-sub").textContent=
+    `${fwRangeLabel()} · Stacked by CP1 · CP2 · CP3`;
+
+  document.getElementById("ov-stats").innerHTML=[
+    {l:"Processors",      v:procs.length,         s:"LanIDs on record",    c:navy},
+    {l:"Total Incidents", v:totalIncidents,        s:"assessed dept-wide",  c:navy},
+    {l:"Active Weeks",    v:activeWeekSet.size,    s:"weeks with errors",   c:navy},
+    {l:"CP1 Flags",       v:totalCP1,              s:"Shipment checkpoint", c:CP_VIZ.CP1},
+    {l:"CP2 Flags",       v:totalCP2,              s:"Piece checkpoint",    c:CP_VIZ.CP2},
+    {l:"CP3 Flags",       v:totalCP3,              s:"Carton checkpoint",   c:CP_VIZ.CP3},
+  ].map(x=>statCard(x.l,x.v,x.s,x.c)).join("");
+
+  // Populate LanID dropdown — alphabetical by LanID
+  const sorted=Object.values(_data).sort(byLanidAlpha);
+  const sel=document.getElementById("ov-sel");
+  sel.innerHTML=`<option value="">&#8212; Select a LanID &#8212;</option>`+
+    sorted.map(p=>`<option value="${p.lanid}">${p.lanid}</option>`).join("");
+
+  // Weekly stacked chart — all processors, FW1-NUM_WEEKS
+  const weeklyAgg=Array.from({length:NUM_WEEKS},(_,i)=>({fw:i+1,cp1:0,cp2:0,cp3:0}));
+  for(const p of procs){
+    p.weekly.forEach((w,i)=>{weeklyAgg[i].cp1+=w.shipment;weeklyAgg[i].cp2+=w.piece;weeklyAgg[i].cp3+=w.carton;});
+  }
+  mkBar("ch-ov-weekly",weeklyAgg.map(w=>fwLbl(w.fw)),[
+    {label:"CP1 — Shipment",data:weeklyAgg.map(w=>w.cp1),backgroundColor:CP_VIZ.CP1,stack:"s"},
+    {label:"CP2 — Piece",   data:weeklyAgg.map(w=>w.cp2),backgroundColor:CP_VIZ.CP2,stack:"s"},
+    {label:"CP3 — Carton",  data:weeklyAgg.map(w=>w.cp3),backgroundColor:CP_VIZ.CP3,stack:"s",borderRadius:4},
+  ],{stacked:true,legend:true});
+
+  // Top error types per CP, dept-wide
+  const cp1T={},cp2T={},cp3T={};
+  for(const p of procs){
+    for(const[k,v] of Object.entries(p.totals.shipTypes))   cp1T[k]=(cp1T[k]||0)+v;
+    for(const[k,v] of Object.entries(p.totals.pieceTypes))  cp2T[k]=(cp2T[k]||0)+v;
+    for(const[k,v] of Object.entries(p.totals.cartonTypes)) cp3T[k]=(cp3T[k]||0)+v;
+  }
+  [[cp1T,"ch-ov-cp1",CP_VIZ.CP1],[cp2T,"ch-ov-cp2",CP_VIZ.CP2],[cp3T,"ch-ov-cp3",CP_VIZ.CP3]].forEach(([types,id,color])=>{
+    const s=Object.entries(types).sort((a,b)=>b[1]-a[1]).slice(0,6);
+    if(s.length) mkBar(id,s.map(([k])=>trunc(k,26)),[{data:s.map(([,v])=>v),backgroundColor:color,borderRadius:4}],{horizontal:true});
+  });
+
+  // ── Dept-wide CP summary cards (same layout as individual processor cards)
+  const deptWeekly=Array.from({length:NUM_WEEKS},(_,i)=>({fw:i+1,shipment:0,piece:0,carton:0,total:0}));
+  for(const p of procs){
+    p.weekly.forEach((w,i)=>{
+      deptWeekly[i].shipment+=w.shipment;
+      deptWeekly[i].piece+=w.piece;
+      deptWeekly[i].carton+=w.carton;
+      deptWeekly[i].total+=w.total;
+    });
+  }
+  const deptTotals={ shipment:totalCP1, piece:totalCP2, carton:totalCP3 };
+
+  // Week-over-week comparison (current FW vs previous FW) instead of an
+  // all-time slope — dept-wide totals only ever climb week over week since
+  // they're cumulative-by-nature in volume, so a slope always reads as
+  // "increasing." A WoW delta actually shows whether THIS week was better
+  // or worse than last week.
+  function wowDelta(key){
+    const curFw=NUM_WEEKS, prevFw=NUM_WEEKS-1;
+    const cur=deptWeekly[curFw-1]?.[key]??0;
+    const prev=prevFw>=1?(deptWeekly[prevFw-1]?.[key]??0):null;
+    if(prev===null) return{text:"No prior week to compare",color:gc(),diff:0};
+    const diff=cur-prev;
+    if(diff>0)  return{text:`▲ +${diff} vs ${fwLbl(prevFw)}`, color:"#ef4444",diff};
+    if(diff<0)  return{text:`▼ ${diff} vs ${fwLbl(prevFw)}`,  color:"#10b981",diff};
+    return{text:`— Flat vs ${fwLbl(prevFw)}`,color:"#94a3b8",diff:0};
+  }
+
+  const ovCpRows=[
+    {label:"Shipment (CP1)",key:"shipment",types:cp1T,color:CP_VIZ.CP1},
+    {label:"Piece (CP2)",   key:"piece",   types:cp2T,color:CP_VIZ.CP2},
+    {label:"Carton (CP3)",  key:"carton",  types:cp3T,color:CP_VIZ.CP3},
+  ];
+  document.getElementById("ov-cp-cards").innerHTML=ovCpRows.map(r=>{
+    const tot=deptTotals[r.key], wow=wowDelta(r.key);
+    const curWeekCount=deptWeekly[NUM_WEEKS-1]?.[r.key]??0;
+    const entries=Object.entries(r.types).sort((a,b)=>b[1]-a[1]);
+    const rows=entries.length
+      ?entries.map(([t,c],i)=>`<tr${i===entries.length-1?' style="border-bottom:none"':""}>
+          <td>${esc(t)}</td><td class="c">${c}</td>
+          <td class="r">${tot>0?Math.round(c/tot*100):0}%</td>
+        </tr>`).join("")
+      :`<tr><td colspan="3" class="no-data-italic">No errors recorded</td></tr>`;
+    return`<div class="cp-card">
+      <div class="cp-card-hdr">
+        <span class="cp-dot-lg" style="background:${r.color}"></span>
+        <span class="cp-card-name">${r.label}</span>
+        <span class="cp-card-count" style="color:${r.color}">${tot}</span>
+      </div>
+      <div class="cp-trend-row">
+        <span>${fwLbl(NUM_WEEKS)}: ${curWeekCount}</span>
+        <span style="color:${wow.color};font-weight:700">${wow.text}</span>
+      </div>
+      <div class="subtype-lbl">Error Sub-Types (All-Time)</div>
+      <table class="subtype-tbl">
+        <thead><tr>
+          <th>Error Sub-Type</th><th class="r">Count</th><th class="r">% CP</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }).join("");
+}
+
+// =============================================================================
+// CHART HELPERS
+// =============================================================================
+function killChart(id){if(_ch[id]){_ch[id].destroy();delete _ch[id];}}
+
+function mkBar(id,labels,datasets,opts={}){
+  killChart(id);
+  const ctx=document.getElementById(id);
+  if(!ctx) return;
+  const{stacked=false,horizontal=false,legend=false}=opts;
+  _ch[id]=new Chart(ctx,{
+    type:"bar",
+    data:{labels,datasets},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      indexAxis:horizontal?"y":"x",
+      plugins:{
+        legend:{display:legend,labels:{color:gc(),font:{size:11},boxWidth:12,padding:12}},
+        tooltip:{backgroundColor:_dark?"#1a2235":"#ffffff",titleColor:gt(),
+          bodyColor:gc(),borderColor:gb(),borderWidth:1,cornerRadius:8},
+      },
+      scales:{
+        x:{stacked,ticks:{color:gc(),font:{size:10}},
+          grid:{display:horizontal,color:gb()},border:{display:false}},
+        y:{stacked,ticks:{color:gc(),font:{size:10}},
+          grid:{display:!horizontal,color:gb()},border:{display:false}},
+      }
+    }
+  });
+}
+
+// =============================================================================
+// DETAIL RENDERING
+// =============================================================================
+function renderDetail(lanid){
+  const proc=_data[lanid]; if(!proc) return;
+  _cur=lanid;
+  document.getElementById("hdr-proc-sel").value=lanid;
+  _logFlt="All";
+  // Reset log filter buttons
+  const sc=shiftColor(proc.shift);
+  document.querySelectorAll("#log-filters .flt-btn").forEach(b=>{
+    const on=b.textContent==="All";
+    b.classList.toggle("on",on);
+    b.style.background=on?sc:"transparent";
+    b.style.color=on?"#0f172a":gc();
+    b.style.borderColor=on?sc:gb();
+  });
+
+  const sl=shiftLetter(proc.shift);
+
+  // Trends
+  const trends={
+    shipment:linSlope(proc.weekly,"shipment"),piece:linSlope(proc.weekly,"piece"),
+    carton:linSlope(proc.weekly,"carton"),overall:linSlope(proc.weekly,"total"),
+  };
+  const ot=trendLabel(trends.overall);
+  const topCP=["shipment","piece","carton"].reduce((b,k)=>proc.totals[k]>proc.totals[b]?k:b,"shipment");
+  const topCPLabel={shipment:"Shipment",piece:"Piece",carton:"Carton"}[topCP];
+
+  // Identity header
+  document.getElementById("det-hdr").innerHTML=`
+    <div class="proc-avatar" style="background:${sc};box-shadow:0 0 0 3px var(--bg),0 0 0 5px ${sc}44">${sl}</div>
+    <div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
+        <span style="width:8px;height:8px;border-radius:50%;background:${sc};display:inline-block"></span>
+        <span style="font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.07em;text-transform:uppercase">${proc.shift}&nbsp;&nbsp;${proc.dept}&nbsp;&nbsp;</span>
+        <span style="font-family:monospace;font-size:11px;font-weight:800;color:var(--muted)">${proc.lanid}</span>
+      </div>
+      <div class="proc-meta-name" style="color:${sc}">${esc(proc.name)} &#8212; Error Frequency Trend</div>
+      <div class="proc-meta-sub">${fwRangeLabel()}</div>
+    </div>`;
+
+  // Summary stats
+  document.getElementById("det-stats").innerHTML=[
+    {l:"Flags / Errors", v:`${proc.totals.overall} / ${proc.incidents}`, s:"CP flags vs. incidents",  c:sc},
+    {l:"Active Weeks",  v:`${proc.activeWeeks}/${NUM_WEEKS}`,s:"weeks with &#8805;1 flag",            c:gt()},
+    {l:"Overall Trend", v:ot.text,                           s:`slope ${trends.overall.toFixed(3)}/wk`,c:ot.color},
+    {l:"Top Checkpoint",v:topCPLabel,                        s:`${proc.totals[topCP]} flags`,          c:gt()},
+  ].map(s=>`<div class="stat-card">
+    <div class="stat-lbl">${s.l}</div>
+    <div class="stat-val" style="color:${s.c}">${s.v}</div>
+    <div class="stat-sub">${s.s}</div>
+  </div>`).join("");
+
+  // Impact stats
+  document.getElementById("det-impact").innerHTML=[
+    {l:"Total Units Impacted",v:proc.totalUnits.toLocaleString()},
+    {l:"Total Cases Impacted",v:proc.totalCases.toLocaleString()},
+  ].map(s=>`<div class="impact-card">
+    <div class="stat-lbl">${s.l}</div>
+    <div class="stat-val" style="color:#D97706">${s.v}</div>
+    <div class="stat-sub">across all incidents</div>
+  </div>`).join("");
+
+  // Trend subtitle
+  document.getElementById("trend-sub").innerHTML=
+    `Slope: ${trends.overall.toFixed(3)} flags/wk &nbsp;&#183;&nbsp; <span style="color:${ot.color};font-weight:700">${ot.text}</span>`;
+
+  // Checkpoint summary cards
+  const cpRows=[
+    {label:"Shipment (CP1)",key:"shipment",typeKey:"shipTypes",  color:CP_VIZ.CP1},
+    {label:"Piece (CP2)",   key:"piece",   typeKey:"pieceTypes", color:CP_VIZ.CP2},
+    {label:"Carton (CP3)",  key:"carton",  typeKey:"cartonTypes",color:CP_VIZ.CP3},
+  ];
+  document.getElementById("cp-cards").innerHTML=cpRows.map(r=>{
+    const tot=proc.totals[r.key], tr=trendLabel(trends[r.key]);
+    const entries=Object.entries(proc.totals[r.typeKey]||{}).sort((a,b)=>b[1]-a[1]);
+    const rows=entries.length
+      ?entries.map(([t,c],i)=>`<tr${i===entries.length-1?' style="border-bottom:none"':""}>
+          <td>${esc(t)}</td><td class="c">${c}</td>
+          <td class="r">${tot>0?Math.round(c/tot*100):0}%</td>
+        </tr>`).join("")
+      :`<tr><td colspan="3" class="no-data-italic">No errors recorded</td></tr>`;
+    return`<div class="cp-card">
+      <div class="cp-card-hdr">
+        <span class="cp-dot-lg" style="background:${r.color}"></span>
+        <span class="cp-card-name">${r.label}</span>
+        <span class="cp-card-count" style="color:${r.color}">${tot}</span>
+      </div>
+      <div class="cp-trend-row">
+        <span>Slope: ${trends[r.key].toFixed(3)}/wk</span>
+        <span style="color:${tr.color};font-weight:700">${tr.text}</span>
+      </div>
+      <div class="subtype-lbl">Error Sub-Types (All-Time)</div>
+      <table class="subtype-tbl">
+        <thead><tr>
+          <th>Error Sub-Type</th><th class="r">Count</th><th class="r">% CP</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }).join("");
+
+  renderCharts(proc,trends,sc);
+  renderLog(proc);
+}
+
+// =============================================================================
+// CHART RENDERING (detail view)
+// =============================================================================
+function renderCharts(proc,trends,sc){
+  const fw_labels=proc.weekly.map(w=>fwLbl(w.fw));
+
+  // Value labels plugin for checkpoint flags bar
+  const valueLabels={
+    id:"valueLabels",
+    afterDatasetsDraw(chart){
+      const{ctx}=chart;
+      chart.data.datasets[0].data.forEach((_,i)=>{
+        const bar=chart.getDatasetMeta(0).data[i];
+        const val=chart.data.datasets[0].data[i];
+        ctx.save();ctx.fillStyle=gt();
+        ctx.font="bold 13px Segoe UI,system-ui,sans-serif";
+        ctx.textAlign="center";ctx.textBaseline="bottom";
+        ctx.fillText(val,bar.x,bar.y-4);ctx.restore();
+      });
+    }
+  };
+
+  const ttBase={
+    backgroundColor:_dark?"#1a2235":"#ffffff",titleColor:gt(),
+    bodyColor:gc(),borderColor:gb(),borderWidth:1,cornerRadius:8,
+  };
+
+  // Weekly stacked bar
+  killChart("weekly");
+  _ch.weekly=new Chart(document.getElementById("ch-weekly").getContext("2d"),{
+    type:"bar",
+    data:{labels:fw_labels,datasets:[
+      {label:"Shipment (CP1)",data:proc.weekly.map(w=>w.shipment),backgroundColor:CP_VIZ.CP1,stack:"s"},
+      {label:"Piece (CP2)",   data:proc.weekly.map(w=>w.piece),   backgroundColor:CP_VIZ.CP2,stack:"s"},
+      {label:"Carton (CP3)",  data:proc.weekly.map(w=>w.carton),  backgroundColor:CP_VIZ.CP3,stack:"s",borderRadius:{topLeft:4,topRight:4}},
+    ]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:gc(),font:{size:11},boxWidth:12,padding:12}},
+        tooltip:{...ttBase,callbacks:{title:([{dataIndex}])=>{const w=proc.weekly[dataIndex];return`${fwLbl(w.fw)} (${w.dateRange})`;}}}},
+      scales:{
+        x:{stacked:true,ticks:{color:gc(),font:{size:11}},grid:{color:gb()},border:{display:false}},
+        y:{stacked:true,ticks:{color:gc(),font:{size:11},precision:0},grid:{color:gb()},border:{display:false}},
+      }
+    }
+  });
+
+  // Trend line
+  killChart("trend");
+  _ch.trend=new Chart(document.getElementById("ch-trend").getContext("2d"),{
+    type:"line",
+    data:{labels:fw_labels,datasets:[{
+      label:"Total CP Flags",data:proc.weekly.map(w=>w.total),
+      borderColor:sc,backgroundColor:sc+"22",pointBackgroundColor:sc,
+      pointRadius:4,borderWidth:2.5,tension:0.1,fill:false,
+    }]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{...ttBase}},
+      scales:{
+        x:{ticks:{color:gc(),font:{size:11}},grid:{color:gb()},border:{display:false}},
+        y:{ticks:{color:gc(),font:{size:11},precision:0},grid:{color:gb()},border:{display:false}},
+      }}
+  });
+
+  // Checkpoint flags vertical bar
+  killChart("cpflags");
+  _ch.cpflags=new Chart(document.getElementById("ch-cpflags").getContext("2d"),{
+    type:"bar",
+    plugins:[valueLabels],
+    data:{labels:["CP1","CP2","CP3"],datasets:[{
+      label:"Flags",
+      data:[proc.totals.shipment,proc.totals.piece,proc.totals.carton],
+      backgroundColor:[CP_VIZ.CP1,CP_VIZ.CP2,CP_VIZ.CP3],borderRadius:6,
+    }]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{...ttBase}},
+      scales:{
+        x:{ticks:{color:gc(),font:{size:12,weight:"bold"}},grid:{color:gb()},border:{display:false}},
+        y:{ticks:{color:gc(),font:{size:11},precision:0},grid:{color:gb()},border:{display:false},
+          max:Math.max(proc.totals.shipment,proc.totals.piece,proc.totals.carton)+2},
+      }}
+  });
+
+  // Top error types horizontal bar
+  const topTypes=[
+    ...Object.entries(proc.totals.shipTypes).map(([type,count])=>({type,count,cp:"CP1"})),
+    ...Object.entries(proc.totals.pieceTypes).map(([type,count])=>({type,count,cp:"CP2"})),
+    ...Object.entries(proc.totals.cartonTypes).map(([type,count])=>({type,count,cp:"CP3"})),
+  ].sort((a,b)=>b.count-a.count);
+
+  document.getElementById("ch-toperr-wrap").style.height=Math.max(120,topTypes.length*34+16)+"px";
+  killChart("toperr");
+  _ch.toperr=new Chart(document.getElementById("ch-toperr").getContext("2d"),{
+    type:"bar",
+    data:{labels:topTypes.map(e=>trunc(e.type,24)),datasets:[{
+      label:"Flags",data:topTypes.map(e=>e.count),
+      backgroundColor:topTypes.map(e=>CP_VIZ[e.cp]),borderRadius:4,
+    }]},
+    options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{...ttBase}},
+      scales:{
+        x:{ticks:{color:gc(),font:{size:11},precision:0},grid:{color:gb(),display:true},border:{display:false}},
+        y:{ticks:{color:gc(),font:{size:11}},grid:{display:false},border:{display:false}},
+      }}
+  });
+}
+
+// =============================================================================
+// LOG RENDERING
+// =============================================================================
+function renderLog(proc){
+  proc=proc||(_cur&&_data[_cur]); if(!proc) return;
+  const sc=shiftColor(proc.shift);
+  const filtered=proc.rawLog.filter(r=>{
+    if(_logFlt==="CP1") return r.cps.some(c=>c.cp==="CP1");
+    if(_logFlt==="CP2") return r.cps.some(c=>c.cp==="CP2");
+    if(_logFlt==="CP3") return r.cps.some(c=>c.cp==="CP3");
+    return true;
+  });
+  document.getElementById("log-title").innerHTML=
+    `${filtered.length} Assessed${_logFlt!=="All"?` &nbsp;&#183;&nbsp; ${_logFlt} filter`:""}`;
+  document.getElementById("log-body").innerHTML=filtered.length
+    ?filtered.map(r=>{
+        const dateStr=r.date?r.date.slice(5).replace("-","/"): "&#8212;";
+        const badges=r.cps.map(c=>`<span class="cp-badge" style="${CP_BADGE_CSS[c.cp]||""}">${esc(c.cp)}: ${esc(c.type)}</span>`).join("");
+        return`<div class="log-entry">
+          <div class="log-wk">
+            <div class="log-wk-num" style="color:${sc}">${r.fwLabel||fwLbl(r.fw)}</div>
+            <div class="log-wk-dt">${dateStr}</div>
+          </div>
+          <div class="log-body-inner">
+            <div class="log-badges">${badges}</div>
+            <div class="log-comment">${esc(r.comment)}</div>
+            <div class="log-meta"><b>Cases:</b> ${esc(r.casesRaw)||"&#8212;"} &nbsp;&#183;&nbsp; <b>Units:</b> ${esc(r.unitsRaw)||"&#8212;"}</div>
+          </div>
+        </div>`;
+      }).join("")
+    :`<div style="color:var(--muted);font-size:13px;padding:12px 0">No errors match this filter.</div>`;
+}
+
+function setLogFlt(f,btn){
+  _logFlt=f;
+  const proc=_cur&&_data[_cur], sc=proc?shiftColor(proc.shift):"var(--accent)";
+  document.querySelectorAll("#log-filters .flt-btn").forEach(b=>{
+    const on=b.textContent===f;
+    b.classList.toggle("on",on);
+    b.style.background=on?sc:"transparent";
+    b.style.color=on?"#0f172a":gc();
+    b.style.borderColor=on?sc:gb();
+  });
+  renderLog();
+}
+
+// =============================================================================
+// THEME
+// =============================================================================
+function toggleTheme(){
+  _dark=!_dark;
+  document.body.dataset.theme=_dark?"dark":"light";
+  const label=_dark?"☀️ Light":"🌙 Dark";
+  document.getElementById("theme-btn").textContent=label;
+  const fb=document.getElementById("fb-theme-btn");
+  if(fb) fb.textContent=label;
+  // Redraw charts for current view
+  if(document.getElementById("v-ov").classList.contains("active")) renderOverview();
+  if(document.getElementById("v-det").classList.contains("active")&&_cur) {
+    const proc=_data[_cur];
+    const trends={
+      shipment:linSlope(proc.weekly,"shipment"),piece:linSlope(proc.weekly,"piece"),
+      carton:linSlope(proc.weekly,"carton"),overall:linSlope(proc.weekly,"total"),
+    };
+    renderCharts(proc,trends,shiftColor(proc.shift));
+  }
+}
+
+// =============================================================================
+// BOOT
+// =============================================================================
+if(sessionStorage.getItem("mwfc_auth")!=="1"){
+  window.location.href=HUB_URL;
+}else{
+  autoLoad();
+}
+</script>
+</body>
+</html>
