@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MWFC Receiving Error Dashboard</title>
+  <style>
+    :root {
+      --bg: #0f1623;
+      --surface: #1a2235;
+      --surface2: #222d42;
+      --border: #2e3f5c;
+      --accent: #38bdf8;
+      --accent2: #0ea5e9;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --card-hover: #263550;
+      --badge-bg: #1e3a5f;
+      --badge-text: #7dd3fc;
+    }
+    [data-theme="light"] {
+      --bg: #f0f4f8;
+      --surface: #ffffff;
+      --surface2: #e8eef5;
+      --border: #cbd5e1;
+      --accent: #0369a1;
+      --accent2: #0284c7;
+      --text: #1e293b;
+      --muted: #64748b;
+      --card-hover: #dbeafe;
+      --badge-bg: #dbeafe;
+      --badge-text: #1d4ed8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    /* ── PASSWORD GATE ── */
+    #gate {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+    .gate-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 3rem 2.5rem;
+      width: 100%;
+      max-width: 400px;
+      text-align: center;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+    }
+    .gate-logo { font-size: 2.5rem; margin-bottom: 0.5rem; }
+    .gate-title { font-size: 1.4rem; font-weight: 700; color: var(--text); margin-bottom: 0.25rem; }
+    .gate-sub { font-size: 0.85rem; color: var(--muted); margin-bottom: 2rem; }
+    .gate-label {
+      display: block; text-align: left; font-size: 0.8rem; font-weight: 600;
+      color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem;
+    }
+    .gate-input {
+      width: 100%; padding: 0.75rem 1rem; background: var(--surface2);
+      border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+      font-size: 1rem; margin-bottom: 1rem; outline: none; transition: border-color 0.2s;
+    }
+    .gate-input:focus { border-color: var(--accent); }
+    .gate-btn {
+      width: 100%; padding: 0.75rem; background: var(--accent); color: #fff;
+      border: none; border-radius: 8px; font-size: 1rem; font-weight: 600;
+      cursor: pointer; transition: background 0.2s;
+    }
+    .gate-btn:hover { background: var(--accent2); }
+    .gate-error { margin-top: 0.75rem; font-size: 0.85rem; color: #f87171; display: none; }
+
+    /* ── MAIN HUB ── */
+    #hub { display: none; }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .header-left { display: flex; align-items: center; gap: 0.75rem; }
+    .header-icon { font-size: 1.5rem; }
+    .header-title { font-size: 1.1rem; font-weight: 700; color: var(--text); line-height: 1.2; }
+    .header-sub { font-size: 0.75rem; color: var(--muted); }
+    .theme-btn {
+      background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+      padding: 0.4rem 0.8rem; color: var(--text); font-size: 0.85rem;
+      cursor: pointer; transition: background 0.2s; white-space: nowrap;
+    }
+    .theme-btn:hover { background: var(--card-hover); }
+
+    main { max-width: 960px; margin: 0 auto; padding: 2.5rem 1.5rem; }
+
+    .section-label {
+      font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--accent); margin-bottom: 1rem;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1.25rem;
+      margin-bottom: 3rem;
+    }
+
+    .card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+      padding: 1.5rem; text-decoration: none; color: var(--text);
+      display: flex; flex-direction: column; gap: 0.75rem;
+      transition: background 0.15s, border-color 0.15s, transform 0.15s;
+      cursor: pointer;
+    }
+    .card:hover { background: var(--card-hover); border-color: var(--accent); transform: translateY(-2px); }
+    .card-top { display: flex; align-items: flex-start; justify-content: space-between; }
+    .card-icon { font-size: 1.75rem; line-height: 1; }
+    .card-badge {
+      font-size: 0.7rem; font-weight: 600; background: var(--badge-bg); color: var(--badge-text);
+      padding: 0.2rem 0.55rem; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .card-name { font-size: 1rem; font-weight: 700; color: var(--text); }
+    .card-desc { font-size: 0.82rem; color: var(--muted); line-height: 1.5; }
+    .card-footer {
+      margin-top: auto; font-size: 0.78rem; color: var(--accent);
+      font-weight: 600; display: flex; align-items: center; gap: 0.25rem;
+    }
+
+    .coming-soon { opacity: 0.5; pointer-events: none; cursor: default; }
+    .coming-soon .card-badge { background: var(--surface2); color: var(--muted); }
+
+    footer {
+      text-align: center; padding: 2rem; font-size: 0.75rem;
+      color: var(--muted); border-top: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body data-theme="dark">
+
+  <!-- PASSWORD GATE -->
+  <div id="gate">
+    <div class="gate-box">
+      <div class="gate-logo">📦</div>
+      <div class="gate-title">MWFC Receiving</div>
+      <div class="gate-sub">Error Dashboard Hub · Internal Use Only</div>
+      <label class="gate-label" for="pwd">Access Code</label>
+      <input class="gate-input" type="password" id="pwd" placeholder="Enter access code"
+        onkeydown="if(event.key==='Enter')unlock()" />
+      <button class="gate-btn" onclick="unlock()">Enter</button>
+      <div class="gate-error" id="gate-error">Incorrect access code. Try again.</div>
+    </div>
+  </div>
+
+  <!-- MAIN HUB -->
+  <div id="hub">
+    <header>
+      <div class="header-left">
+        <span class="header-icon">📦</span>
+        <div>
+          <div class="header-title">MWFC Receiving Error Dashboard</div>
+          <div class="header-sub">Internal Operations Hub</div>
+        </div>
+      </div>
+      <button class="theme-btn" onclick="toggleTheme()" id="theme-label">☀️ Light</button>
+    </header>
+
+    <main>
+      <div class="section-label">Active Tools</div>
+      <div class="grid">
+
+        <!-- Weekly Error Report -->
+        <div class="card" onclick="goTo('weekly-error-report.html')">
+          <div class="card-top">
+            <span class="card-icon">📊</span>
+            <span class="card-badge">Live</span>
+          </div>
+          <div class="card-name">Weekly Error Report</div>
+          <div class="card-desc">Filter receiving errors by fiscal week. Checkpoint breakdown, shift analysis, and processor-level detail.</div>
+          <div class="card-footer">Open tool →</div>
+        </div>
+
+        <!-- Monthly Error Report -->
+        <div class="card" onclick="goTo('monthly-error-report.html')">
+          <div class="card-top">
+            <span class="card-icon">📅</span>
+            <span class="card-badge">Live</span>
+          </div>
+          <div class="card-name">Monthly Error Report</div>
+          <div class="card-desc">Calendar month error trends. Month-over-month comparison, 3-month rolling review, and full checkpoint and shift breakdowns.</div>
+          <div class="card-footer">Open tool →</div>
+        </div>
+
+        <!-- YTD Error Report -->
+        <div class="card" onclick="goTo('ytd_report.html')">
+          <div class="card-top">
+            <span class="card-icon">📈</span>
+            <span class="card-badge">Live</span>
+          </div>
+          <div class="card-name">YTD Error Report</div>
+          <div class="card-desc">Year-to-date receiving error trends across all checkpoints and shifts.</div>
+          <div class="card-footer">Open tool →</div>
+        </div>
+
+        <!-- Processor Performance -->
+        <div class="card" onclick="goTo('processor-performance.html')">
+          <div class="card-top">
+            <span class="card-icon">👤</span>
+            <span class="card-badge">Live</span>
+          </div>
+          <div class="card-name">Processor Performance</div>
+          <div class="card-desc">WM Sign-On ID level error tracking. Identify repeated patterns and coaching candidates by checkpoint.</div>
+          <div class="card-footer">Open tool →</div>
+        </div>
+
+        <!-- Processor Error Card -->
+        <div class="card" onclick="goTo('processor-error-card.html')">
+          <div class="card-top">
+            <span class="card-icon">🗂️</span>
+            <span class="card-badge">Live</span>
+          </div>
+          <div class="card-name">Processor Error Card</div>
+          <div class="card-desc">Individual error summary cards per processor. Formatted for coaching conversations and documentation.</div>
+          <div class="card-footer">Open tool →</div>
+        </div>
+
+        <!-- Weekly Error Frequency Heat Map -->
+        <div class="card" onclick="goTo('WeeklyHeatMapErrorsReceiving.html')">
+          <div class="card-top">
+            <span class="card-icon">🔥</span>
+            <span class="card-badge">Live</span>
+          </div>
+          <div class="card-name">Weekly Error Frequency Heat Map</div>
+          <div class="card-desc">52-week error frequency grid by LanID. Shift tabs, RAW/DELTA toggle, trend arrows, and Receiving vs Training department split.</div>
+          <div class="card-footer">Open tool →</div>
+        </div>
+
+      </div>
+    </main>
+
+    <footer>
+      MWFC Receiving Operations · Internal Use Only · Not for distribution
+    </footer>
+  </div>
+
+  <script>
+    const ACCESS_CODE = "599";
+
+    function unlock() {
+      const val = document.getElementById('pwd').value;
+      if (val === ACCESS_CODE) {
+        document.getElementById('gate').style.display = 'none';
+        document.getElementById('hub').style.display = 'block';
+        sessionStorage.setItem('mwfc_auth', '1');
+      } else {
+        document.getElementById('gate-error').style.display = 'block';
+        document.getElementById('pwd').value = '';
+      }
+    }
+
+    if (sessionStorage.getItem('mwfc_auth') === '1') {
+      document.getElementById('gate').style.display = 'none';
+      document.getElementById('hub').style.display = 'block';
+    }
+
+    function goTo(page) { window.location.href = page; }
+
+    function toggleTheme() {
+      const body = document.body;
+      const btn = document.getElementById('theme-label');
+      if (body.dataset.theme === 'dark') {
+        body.dataset.theme = 'light';
+        btn.textContent = '🌙 Dark';
+      } else {
+        body.dataset.theme = 'dark';
+        btn.textContent = '☀️ Light';
+      }
+    }
+  </script>
+</body>
+</html>
