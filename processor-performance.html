@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monthly Processor Performance · MWFC Receiving</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+</head>
+<body style="margin:0;padding:0">
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useMemo } = React;
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+// NOTE: Month keys ("Jan 26", "Feb 26"...) come from the production workbook's
+// own sheet names / row dates, and are sorted using monthSortKey() below
+// (year-aware) rather than a hardcoded single-year lookup table — this keeps
+// sorting correct now that the error workbook spans multiple fiscal years
+// (FW48 '25 through FW7 '27 and beyond).
+function monthSortKey(m) {
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const [mon, yr] = String(m).split(' ');
+  const idx = MONTHS.indexOf(mon);
+  const yrNum = parseInt(yr, 10);
+  if (idx < 0 || isNaN(yrNum)) return Infinity; // unparseable keys sort last
+  return yrNum * 12 + idx;
+}
+
+const SHIFT_META = {
+  a: { label:'A-Shift', color:'#0284c7', bg:'rgba(2,132,199,.12)',  bdr:'rgba(2,132,199,.35)' },
+  b: { label:'B-Shift', color:'#7c3aed', bg:'rgba(124,58,237,.12)', bdr:'rgba(124,58,237,.35)' },
+  c: { label:'C-Shift', color:'#059669', bg:'rgba(5,150,105,.12)',  bdr:'rgba(5,150,105,.35)'  },
+};
+
+const ERR_FILE  = 'AI_Safe_Weekly_Error_Data.xlsx';
+const PROD_FILE = 'AI-safe-monthly-processing-data.xlsx';
+const HUB_URL   = 'https://jacobbecicka.github.io/Receiving_Error_Dashboard/index.html';
+
+// Sheets in the error workbook are named directly with their fiscal week,
+// e.g. "FW1 26", "FW48 25" — no calendar-week-offset math is needed here at
+// all, since this tool only cares about which sheets to scan for rows; the
+// actual calendar month a row belongs to is derived from its own Start time
+// date (see xlDateToMonthKey), completely independent of sheet naming.
+const FW_SHEET_RE = /^FW\s*\d+\s+\d+$/i;
+
+const COLS = [
+  { key:'tm',    label:'TM',       title:'LanID — Team Member identifier',                              w:72,  sortable:true  },
+  { key:'str',   label:'STR',      title:'Strength score: avg of VOL% and ACC% (0–100)',                w:98,  sortable:true  },
+  { key:'vol',   label:'VOL%',     title:'Volume percentile. C-shift normalized ×40/36.',               w:52,  sortable:true  },
+  { key:'acc',   label:'ACC%',     title:'Accuracy percentile: avg zone + split accuracy ranks.',       w:52,  sortable:true  },
+  { key:'zRate', label:'ZONE',     title:'Zone/pallet errors per 10,000 placement actions.',            w:52,  sortable:true  },
+  { key:'zErr',  label:'ZPE',      title:'Raw zone/pallet error count.',                                w:40,  sortable:true  },
+  { key:'sRate', label:'SPLIT',    title:'Split-move errors per 100,000 split-case units.',             w:52,  sortable:true  },
+  { key:'sErr',  label:'SPE',      title:'Raw split-move error count.',                                 w:40,  sortable:true  },
+  { key:'pal',   label:'PAL',      title:'Palletize units.',                                            w:56,  sortable:true  },
+  { key:'sc',    label:'SC UNITS', title:'Split-case units processed.',                                 w:68,  sortable:true  },
+  { key:'ps',    label:'SCANS',    title:'Process scan cases.',                                         w:56,  sortable:true  },
+  { key:'sh',    label:'SH',       title:'Shift assignment.',                                           w:32,  sortable:true  },
+  { key:'zTrend',label:'Z▲',       title:'Zone error trend vs prior month.',                            w:28,  sortable:false },
+  { key:'sTrend',label:'S▲',       title:'Split error trend vs prior month.',                           w:28,  sortable:false },
+];
+
+// ── Theme tokens ──────────────────────────────────────────────────────────────
+function makeTk(dark) {
+  return {
+    bg:       dark ? '#0f172a' : '#f0f4f8',
+    grad:     dark ? 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(56,189,248,.07),transparent)'
+                   : 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(2,132,199,.07),transparent)',
+    text:     dark ? '#e2e8f0' : '#1e293b',
+    muted:    dark ? '#94a3b8' : '#64748b',
+    faint:    dark ? '#475569' : '#cbd5e1',
+    cardBg:   dark ? '#1e293b' : '#ffffff',
+    cardBdr:  dark ? '#334155' : '#e2e8f0',
+    cardShd:  dark ? 'none'    : '0 1px 6px rgba(0,0,0,.06)',
+    shadow:   dark ? '0 2px 14px rgba(0,0,0,.35)' : '0 2px 12px rgba(0,0,0,.07)',
+    tblBg:    dark ? '#1e293b' : '#ffffff',
+    tblBdr:   dark ? '#334155' : '#e2e8f0',
+    rowE:     dark ? '#1e293b' : '#ffffff',
+    rowO:     dark ? '#243044' : '#f8fafc',
+    rowHov:   dark ? '#2d3f5c' : '#eff6ff',
+    thBg:     dark ? '#162032' : '#f8fafc',
+    thTxt:    dark ? '#94a3b8' : '#64748b',
+    thAct:    dark ? '#e2e8f0' : '#1e293b',
+    rowBdr:   dark ? '#263248' : '#f1f5f9',
+    pillCont: dark ? '#162032' : '#f1f5f9',
+    pillOn:   dark ? '#334155' : '#ffffff',
+    pillOnBdr:dark ? '#475569' : '#cbd5e1',
+    legBg:    dark ? 'rgba(30,41,59,.9)' : 'rgba(255,255,255,.9)',
+    legBdr:   dark ? '#334155' : '#e2e8f0',
+    barBg:    dark ? '#334155' : '#e2e8f0',
+    selBg:    dark ? '#1e293b' : '#ffffff',
+    selBdr:   dark ? '#475569' : '#cbd5e1',
+    selTxt:   dark ? '#e2e8f0' : '#1e293b',
+    togTrack: dark ? '#475569' : '#cbd5e1',
+    togKnob:  dark ? '#e2e8f0' : '#ffffff',
+    h1:       dark ? '#f1f5f9' : '#0f172a',
+    sub:      dark ? '#64748b' : '#94a3b8',
+    numTxt:   dark ? '#cbd5e1' : '#475569',
+    zErrTxt:  dark ? '#fca5a5' : '#b91c1c',
+    sErrTxt:  dark ? '#93c5fd' : '#1d4ed8',
+    tmStar:   dark ? '#fbbf24' : '#92400e',
+    tmNorm:   dark ? '#94a3b8' : '#334155',
+    swatchBdr:dark ? '#475569' : '#e2e8f0',
+    scrTrack: dark ? '#1e293b' : '#e2e8f0',
+    scrThumb: dark ? '#475569' : '#94a3b8',
+  };
+}
+
+// ── Colour helpers ────────────────────────────────────────────────────────────
+function hexRgb(h) {
+  return [parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)];
+}
+function lerp(c1,c2,t) {
+  const [r1,g1,b1]=hexRgb(c1),[r2,g2,b2]=hexRgb(c2);
+  return `rgb(${Math.round(r1+(r2-r1)*t)},${Math.round(g1+(g2-g1)*t)},${Math.round(b1+(b2-b1)*t)})`;
+}
+
+function zoneColor(rate, dark) {
+  if (rate===null||rate===undefined) return dark?'#1e293b':'#f1f5f9';
+  if (rate===0) return dark?'#14352a':'#dcfce7';
+  const t = Math.min(rate/8,1);
+  if (t<0.33) return lerp(dark?'#14352a':'#dcfce7', dark?'#7c4400':'#fef3c7', t/0.33);
+  if (t<0.66) return lerp(dark?'#7c4400':'#fef3c7', dark?'#991b1b':'#fee2e2', (t-0.33)/0.33);
+  return lerp(dark?'#991b1b':'#fee2e2', dark?'#450a0a':'#dc2626', (t-0.66)/0.34);
+}
+function zoneFg(rate, dark) {
+  if (rate===null||rate===undefined) return dark?'#475569':'#94a3b8';
+  if (rate===0) return dark?'#4ade80':'#166534';
+  return Math.min(rate/8,1)>0.5 ? '#fff' : (dark?'#fca5a5':'#991b1b');
+}
+function splitColor(rate, dark) {
+  if (rate===null||rate===undefined) return dark?'#1e293b':'#f1f5f9';
+  if (rate===0) return dark?'#0f1e3a':'#eff6ff';
+  const t = Math.min(rate/30,1);
+  if (t<0.33) return lerp(dark?'#0f1e3a':'#eff6ff', dark?'#1e3a5f':'#bfdbfe', t/0.33);
+  if (t<0.66) return lerp(dark?'#1e3a5f':'#bfdbfe', dark?'#1e40af':'#60a5fa', (t-0.33)/0.33);
+  return lerp(dark?'#1e40af':'#60a5fa', dark?'#1d4ed8':'#2563eb', (t-0.66)/0.34);
+}
+function splitFg(rate, dark) {
+  if (rate===null||rate===undefined) return dark?'#475569':'#94a3b8';
+  if (rate===0) return dark?'#93c5fd':'#1d4ed8';
+  return Math.min(rate/30,1)>0.55 ? '#fff' : (dark?'#93c5fd':'#1e40af');
+}
+
+// ── Parsing helpers ───────────────────────────────────────────────────────────
+function findIdx(hdr, terms) {
+  return hdr.findIndex(h =>
+    h!=null && terms.some(t =>
+      String(h).toLowerCase().replace(/\xa0/g,'').trim().includes(t.toLowerCase())
+    )
+  );
+}
+
+function xlDateToMonthKey(val) {
+  let d;
+  if (val instanceof Date)                  d = val;
+  else if (typeof val==='number' && val>0)  d = new Date((val-25569)*86400000);
+  else if (typeof val==='string' && val)    d = new Date(val);
+  else                                      return null;
+  if (!d||isNaN(d.getTime())) return null;
+  const mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
+  const yr = String(d.getFullYear()).slice(2);
+  return `${mo} ${yr}`;
+}
+
+function normalizeSheetMon(name) {
+  return name
+    .replace(/^July\s/,  'Jul ')
+    .replace(/^Sept\s/,  'Sep ')
+    .trim();
+}
+
+// ── File parsers ──────────────────────────────────────────────────────────────
+function parseErrors(wb) {
+  // errors[lanid][monthKey] = { zErr, sErr, sh, dept }
+  const errors = {};
+
+  for (const sn of wb.SheetNames) {
+    if (!FW_SHEET_RE.test(sn)) continue;
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1,defval:''});
+
+    // Find header row (contains "Start time")
+    const hdrIdx = rows.findIndex(r => findIdx(r,['start time']) >= 0);
+    if (hdrIdx < 0) continue;
+
+    const hdr      = rows[hdrIdx];
+    const startIdx = findIdx(hdr, ['start time']);
+    const wmIdx    = findIdx(hdr, ['wm sign on']);
+    const shiftIdx = findIdx(hdr, ['shift:','shift']);
+    const deptIdx  = findIdx(hdr, ['home department']);
+    const cp3Idx   = findIdx(hdr, ['carton error','checkpoint 3']);
+
+    if (wmIdx<0 || startIdx<0 || cp3Idx<0) continue;
+
+    for (let i=hdrIdx+1; i<rows.length; i++) {
+      const row = rows[i];
+      if (!row || !row[0]) continue;
+
+      const dept  = String(row[deptIdx]||'').replace(/\xa0/g,'').trim().toLowerCase();
+      if (!dept.includes('receiv') && !dept.includes('train')) continue;
+
+      const shift = String(row[shiftIdx]||'').replace(/\xa0/g,'').trim().toLowerCase();
+      const sk = shift.startsWith('a')?'a': shift.startsWith('b')?'b': shift.startsWith('c')?'c': null;
+      if (!sk) continue;
+
+      const wm = String(row[wmIdx]||'').replace(/\xa0/g,'').trim();
+      if (!wm) continue;
+
+      const monthKey = xlDateToMonthKey(row[startIdx]);
+      if (!monthKey) continue;
+
+      if (!errors[wm])            errors[wm]={};
+      if (!errors[wm][monthKey])  errors[wm][monthKey]={zErr:0,sErr:0,sh:sk,dept:dept.includes('train')?'training':'receiving'};
+
+      const cp3  = String(row[cp3Idx]||'').replace(/\xa0/g,'').trim();
+      const parts = cp3.split(';').map(p=>p.trim().toLowerCase());
+      if (parts.some(p=>p.includes('zone destination'))) errors[wm][monthKey].zErr++;
+      if (parts.some(p=>p.includes('split move')))       errors[wm][monthKey].sErr++;
+    }
+  }
+  return errors;
+}
+
+function parseProd(wb) {
+  // prod[tm][monthKey] = { sh, pal, zon, ps, sc }
+  const prod = {};
+
+  for (const sn of wb.SheetNames) {
+    const monthKey = normalizeSheetMon(sn);
+    if (!/^[A-Z][a-z]{2}\s\d{2}$/.test(monthKey)) continue;
+
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1,defval:''});
+    if (rows.length<2) continue;
+
+    // Find header row: must have palletize or split case
+    let hdrIdx = rows.findIndex(r =>
+      findIdx(r,['palletiz'])>=0 || findIdx(r,['split case'])>=0
+    );
+    if (hdrIdx<0) hdrIdx=0; // fallback
+
+    const hdr    = rows[hdrIdx];
+    const tmIdx  = findIdx(hdr, ['wm sign','tm','lanid','user id']);
+    const shIdx  = findIdx(hdr, ['shift']);
+    const palIdx = findIdx(hdr, ['palletiz']);
+    const zonIdx = findIdx(hdr, ['zone assign','zone']);
+    const psIdx  = findIdx(hdr, ['process scan','process']);
+    const scIdx  = findIdx(hdr, ['split case','split']);
+
+    if (tmIdx<0) continue;
+
+    for (let i=hdrIdx+1; i<rows.length; i++) {
+      const row = rows[i];
+      const tm  = String(row[tmIdx]||'').replace(/\xa0/g,'').trim();
+      if (!tm || /^total|^sum/i.test(tm)) continue;
+
+      const shRaw = String(row[shIdx]||'').replace(/\xa0/g,'').trim().toLowerCase();
+      const sk = shRaw.startsWith('a')?'a': shRaw.startsWith('b')?'b': shRaw.startsWith('c')?'c': '';
+      const pal = Number(row[palIdx])||0;
+      const zon = Number(row[zonIdx])||0;
+      const ps  = Number(row[psIdx]) ||0;
+      const sc  = Number(row[scIdx]) ||0;
+
+      if (!prod[tm])           prod[tm]={};
+      if (!prod[tm][monthKey]) prod[tm][monthKey]={sh:'',pal:0,zon:0,ps:0,sc:0};
+
+      prod[tm][monthKey].pal += pal;
+      prod[tm][monthKey].zon += zon;
+      prod[tm][monthKey].ps  += ps;
+      prod[tm][monthKey].sc  += sc;
+      if (sk && !prod[tm][monthKey].sh) prod[tm][monthKey].sh = sk;
+    }
+  }
+  return prod;
+}
+
+// ── Percentile ────────────────────────────────────────────────────────────────
+function pctRank(vals, v) {
+  if (!vals.length) return 50;
+  const below = vals.filter(x=>x<v).length;
+  const equal = vals.filter(x=>x===v).length;
+  return ((below + equal*0.5) / vals.length) * 100;
+}
+
+// ── Performance compute ───────────────────────────────────────────────────────
+function computeRows(errors, prod, selMon, allMons) {
+  if (!errors || !prod) return [];
+
+  const monthsToUse = selMon==='all' ? allMons : [selMon];
+  const tCurr = selMon==='all' ? allMons[allMons.length-1] : selMon;
+  const tPrev = selMon==='all'
+    ? allMons[allMons.length-2]||null
+    : (allMons.indexOf(selMon)>0 ? allMons[allMons.indexOf(selMon)-1] : null);
+
+  // Roster: union of TMs in prod OR errors for selected months
+  const roster = new Set();
+  for (const tm of Object.keys(prod))   { if (monthsToUse.some(m=>prod[tm][m]))   roster.add(tm); }
+  for (const tm of Object.keys(errors)) { if (monthsToUse.some(m=>errors[tm][m])) roster.add(tm); }
+
+  // Single-month rate helpers (closures over prod/errors params)
+  function szRate(tm, mon) {
+    if (!mon) return null;
+    const p = prod[tm]?.[mon]; const e = errors[tm]?.[mon];
+    const pl = (p?.pal||0)+(p?.zon||0);
+    const ze = e?.zErr||0;
+    return pl>0 ? (ze/pl)*10000 : (ze>0?null:0);
+  }
+  function ssRate(tm, mon) {
+    if (!mon) return null;
+    const p = prod[tm]?.[mon]; const e = errors[tm]?.[mon];
+    const sc = p?.sc||0; const se = e?.sErr||0;
+    return sc>0 ? (se/sc)*100000 : (se>0?null:0);
+  }
+
+  // Aggregate per TM
+  const raw = [];
+  for (const tm of roster) {
+    let pal=0,zon=0,ps=0,sc=0,zErr=0,sErr=0,sh='',dept='receiving';
+
+    for (const m of monthsToUse) {
+      const p=prod[tm]?.[m], e=errors[tm]?.[m];
+      if (p) { pal+=p.pal; zon+=p.zon; ps+=p.ps; sc+=p.sc; if (!sh&&p.sh) sh=p.sh; }
+      if (e) { zErr+=e.zErr; sErr+=e.sErr; if (!sh&&e.sh) sh=e.sh; if (e.dept==='training') dept='training'; }
+    }
+
+    const volScore  = (pal+sc)*(sh==='c'?40/36:1);
+    const placement = pal+zon;
+    const zRate = placement>0 ? (zErr/placement)*10000 : (zErr>0?null:0);
+    const sRate = sc>0        ? (sErr/sc)*100000        : (sErr>0?null:0);
+
+    // Trend
+    let zTrend=0, sTrend=0;
+    if (tCurr && tPrev) {
+      const zC=szRate(tm,tCurr), zP=szRate(tm,tPrev);
+      const sC=ssRate(tm,tCurr), sP=ssRate(tm,tPrev);
+      if (zC!==null && zP!==null) zTrend = zC>zP?1:zC<zP?-1:0;
+      if (sC!==null && sP!==null) sTrend = sC>sP?1:sC<sP?-1:0;
+    }
+
+    raw.push({tm,sh,dept,pal,zon,ps,sc,zErr,sErr,zRate,sRate,volScore,zTrend,sTrend});
+  }
+
+  if (!raw.length) return [];
+
+  // Percentiles
+  const vols = raw.map(r=>r.volScore);
+  const negZ  = raw.map(r=>r.zRate!==null ? -r.zRate : -Infinity);
+  const negS  = raw.map(r=>r.sRate!==null ? -r.sRate : -Infinity);
+
+  return raw.map(r => {
+    const vol  = pctRank(vols, r.volScore);
+    const zAcc = pctRank(negZ, r.zRate!==null ? -r.zRate : -Infinity);
+    const sAcc = pctRank(negS, r.sRate!==null ? -r.sRate : -Infinity);
+    const acc  = (zAcc+sAcc)/2;
+    const str  = (vol+acc)/2;
+    return {...r,vol,acc,str};
+  });
+}
+
+// ── Sub-components (OUTSIDE App — prevents keyboard collapse bug) ─────────────
+function TrendCell({val,T}) {
+  if (val===0) return <span style={{color:T.muted,fontSize:'.72rem'}}>→</span>;
+  if (val>0)   return <span style={{color:'#dc2626',fontSize:'.72rem',fontWeight:700}}>▲</span>;
+  return              <span style={{color:'#16a34a',fontSize:'.72rem',fontWeight:700}}>▼</span>;
+}
+
+function StrBar({pct,T}) {
+  const color = pct>=68?'#16a34a':pct>=40?'#d97706':'#dc2626';
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:'.3rem'}}>
+      <div style={{width:38,height:6,borderRadius:3,background:T.barBg,overflow:'hidden'}}>
+        <div style={{width:`${pct}%`,height:'100%',background:color,borderRadius:3}}/>
+      </div>
+      <span style={{fontSize:'.62rem',fontWeight:700,color,minWidth:24,textAlign:'right'}}>
+        {Math.round(pct)}
+      </span>
+    </div>
+  );
+}
+
+function ColumnGuide({T,prevLabel}) {
+  const rows = [
+    ['TM',       'LanID — processor identifier.'],
+    ['STR',      'Strength score: average of VOL% and ACC% percentiles (0–100). ≥68 = ⭐ Star tier.'],
+    ['VOL%',     'Volume percentile vs teammates. C-shift hours adjusted ×40/36. Higher = more output.'],
+    ['ACC%',     'Accuracy percentile: average of zone accuracy rank + split accuracy rank. Higher = fewer errors.'],
+    ['ZONE',     'Zone/pallet errors per 10,000 placement actions (palletize units + zone assign totes). Green → red scale.'],
+    ['ZPE',      'Raw zone/pallet error count for the selected period.'],
+    ['SPLIT',    'Split-move errors per 100,000 split-case units. Light blue → dark blue scale.'],
+    ['SPE',      'Raw split-move error count for the selected period.'],
+    ['PAL',      'Palletize units for the selected period.'],
+    ['SC UNITS', 'Split-case units processed for the selected period.'],
+    ['SCANS',    'Process scan cases for the selected period.'],
+    ['SH',       'Shift assignment: A, B, or C.'],
+    ['Z▲',       `Zone error trend vs ${prevLabel||'prior month'}. ▲ = worsening, ▼ = improving, → = stable.`],
+    ['S▲',       `Split error trend vs ${prevLabel||'prior month'}. ▲ = worsening, ▼ = improving, → = stable.`],
+  ];
+  return (
+    <div>
+      {rows.map(([col,desc]) => (
+        <div key={col} style={{display:'flex',gap:'1rem',padding:'.32rem 0',
+          borderBottom:`1px solid ${T.rowBdr}`}}>
+          <span style={{minWidth:68,fontFamily:'DM Mono,monospace',fontSize:'.6rem',
+            fontWeight:600,color:T.thAct,letterSpacing:'.05em'}}>{col}</span>
+          <span style={{fontSize:'.62rem',color:T.muted}}>{desc}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function App() {
+  const [dark,      setDark]     = useState(false);
+  const [loading,   setLoading]  = useState(true);
+  const [loadErr,   setLoadErr]  = useState(null);
+  const [errors,    setErrors]   = useState(null);
+  const [prod,      setProd]     = useState(null);
+  const [selMon,    setSelMon]   = useState('all');
+  const [shiftFilt, setShiftFilt]= useState('all');
+  const [highlight, setHighlight]= useState('all');
+  const [sortCol,   setSortCol]  = useState('str');
+  const [sortDir,   setSortDir]  = useState(-1);
+  const [guideOpen, setGuideOpen]= useState(false);
+
+  const T = useMemo(()=>makeTk(dark),[dark]);
+
+  useEffect(()=>{
+    (async()=>{
+      try {
+        const [eRes,pRes] = await Promise.all([fetch(ERR_FILE),fetch(PROD_FILE)]);
+        if (!eRes.ok) throw new Error(`Cannot load ${ERR_FILE} (HTTP ${eRes.status}). Ensure the file is uploaded to your GitHub Pages directory.`);
+        if (!pRes.ok) throw new Error(`Cannot load ${PROD_FILE} (HTTP ${pRes.status}). Ensure the file is uploaded to your GitHub Pages directory.`);
+        const [eBuf,pBuf] = await Promise.all([eRes.arrayBuffer(),pRes.arrayBuffer()]);
+        const eWb = XLSX.read(new Uint8Array(eBuf), {type:'array',cellDates:true});
+        const pWb = XLSX.read(new Uint8Array(pBuf), {type:'array',cellDates:true});
+        setErrors(parseErrors(eWb));
+        setProd(parseProd(pWb));
+      } catch(e) {
+        setLoadErr(e.message);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  },[]);
+
+  // Sorted list of months with data — year-aware sort (see monthSortKey),
+  // so this stays correct as the workbook spans multiple fiscal years.
+  const allMons = useMemo(()=>{
+    const seen = new Set();
+    if (errors) Object.values(errors).forEach(m=>Object.keys(m).forEach(k=>seen.add(k)));
+    if (prod)   Object.values(prod).forEach(m=>Object.keys(m).forEach(k=>seen.add(k)));
+    return [...seen].sort((a,b)=>monthSortKey(a)-monthSortKey(b));
+  },[errors,prod]);
+
+  const allRows = useMemo(()=>computeRows(errors,prod,selMon,allMons),[errors,prod,selMon,allMons]);
+
+  const prevLabel = useMemo(()=>{
+    if (selMon==='all') return allMons.length>=2?allMons[allMons.length-2]:null;
+    const i=allMons.indexOf(selMon);
+    return i>0?allMons[i-1]:null;
+  },[selMon,allMons]);
+
+  const rows = useMemo(()=>{
+    let r=[...allRows];
+    if (shiftFilt!=='all')   r=r.filter(x=>x.sh===shiftFilt);
+    if (highlight==='star')  r=r.filter(x=>x.str>=68);
+    if (highlight==='coach') r=r.filter(x=>(x.zRate!==null&&x.zRate>3)||(x.sRate!==null&&x.sRate>15));
+    r.sort((a,b)=>{
+      const va=a[sortCol]??-Infinity, vb=b[sortCol]??-Infinity;
+      if (typeof va==='string'&&typeof vb==='string') return sortDir*va.localeCompare(vb);
+      return sortDir*(Number(va)-Number(vb));
+    });
+    return r;
+  },[allRows,shiftFilt,highlight,sortCol,sortDir]);
+
+  function handleSort(col) {
+    if (sortCol===col) setSortDir(d=>-d);
+    else {setSortCol(col);setSortDir(-1);}
+  }
+
+  // Stats
+  const deptZRate = useMemo(()=>{
+    const ze=allRows.reduce((s,r)=>s+(r.zErr||0),0);
+    const pl=allRows.reduce((s,r)=>s+((r.pal||0)+(r.zon||0)),0);
+    return pl>0?(ze/pl)*10000:null;
+  },[allRows]);
+  const deptSRate = useMemo(()=>{
+    const se=allRows.reduce((s,r)=>s+(r.sErr||0),0);
+    const sc=allRows.reduce((s,r)=>s+(r.sc||0),0);
+    return sc>0?(se/sc)*100000:null;
+  },[allRows]);
+  const coachCount = useMemo(()=>allRows.filter(r=>(r.zRate!==null&&r.zRate>3)||(r.sRate!==null&&r.sRate>15)).length,[allRows]);
+  const starCount  = useMemo(()=>allRows.filter(r=>r.str>=68).length,[allRows]);
+  const shiftCounts = useMemo(()=>({
+    all:allRows.length,
+    a:allRows.filter(r=>r.sh==='a').length,
+    b:allRows.filter(r=>r.sh==='b').length,
+    c:allRows.filter(r=>r.sh==='c').length,
+  }),[allRows]);
+
+  const periodLabel = selMon==='all'
+    ? (allMons.length?`${allMons[0]} – ${allMons[allMons.length-1]}`:'All Months')
+    : selMon;
+
+  const fmtN = n => n==null?'—':Math.round(n).toLocaleString();
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+  return (
+    <div style={{minHeight:'100vh',background:T.bg,backgroundImage:T.grad,
+      fontFamily:"'DM Mono','Courier New',monospace",color:T.text,
+      padding:'1.75rem 2rem 3rem',boxSizing:'border-box',transition:'background .25s,color .25s'}}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@400;600;700;800&display=swap');
+        *{box-sizing:border-box;margin:0;padding:0}
+        ::-webkit-scrollbar{height:4px;width:4px}
+        ::-webkit-scrollbar-track{background:${T.scrTrack}}
+        ::-webkit-scrollbar-thumb{background:${T.scrThumb};border-radius:2px}
+        .tbl-row:hover td{background:${T.rowHov}!important;transition:background .1s}
+        .sth{cursor:pointer;user-select:none;transition:color .15s}
+        .sth:hover{color:${T.thAct}!important}
+        select{font-family:'DM Mono',monospace;outline:none}
+        @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+        /* Uniform header buttons — Hub / Print / Theme — matches Weekly,
+           Monthly Error, YTD, Heat Map, and Processor Error Card reports */
+        .hdr-btn{display:flex;align-items:center;gap:6px;background:${T.cardBg};
+          border:1px solid ${T.cardBdr};border-radius:20px;padding:7px 14px;
+          cursor:pointer;font-size:12px;font-weight:700;color:${T.text};
+          box-shadow:${T.shadow};text-decoration:none;white-space:nowrap;
+          font-family:'DM Sans',sans-serif;transition:opacity .15s}
+        .hdr-btn:hover{opacity:.82}
+        @media print {
+          .no-print{display:none !important}
+          body{background:#fff !important}
+        }
+      `}</style>
+
+      {/* Header */}
+      <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',
+        flexWrap:'wrap',gap:'.75rem',marginBottom:'1.5rem'}}>
+        <div>
+          <p style={{fontSize:'.6rem',letterSpacing:'.2em',color:T.sub,
+            fontFamily:'DM Sans,sans-serif',marginBottom:'.3rem'}}>
+            MWFC RECEIVING · WEEKLY ERROR DATA
+          </p>
+          <h1 style={{fontSize:'1.7rem',fontWeight:800,color:T.h1,
+            fontFamily:'DM Sans,sans-serif',letterSpacing:'-.03em',lineHeight:1}}>
+            Processor Performance
+          </h1>
+          {!loading && !loadErr && (
+            <p style={{fontSize:'.6rem',color:T.sub,marginTop:'.3rem'}}>{periodLabel}</p>
+          )}
+        </div>
+        <div className="no-print" style={{display:'flex',alignItems:'center',gap:'.6rem'}}>
+          <a href={HUB_URL} className="hdr-btn">← Hub</a>
+          <button className="hdr-btn" onClick={()=>window.print()}>🖨️ Print / Save PDF</button>
+          <button className="hdr-btn" onClick={()=>setDark(d=>!d)}>{dark?'☀️ Light':'🌙 Dark'}</button>
+        </div>
+      </div>
+
+      {/* Loading */}
+      {loading && (
+        <div style={{textAlign:'center',padding:'5rem 2rem',color:T.muted}}>
+          <div style={{fontSize:'1.8rem',marginBottom:'1rem',
+            display:'inline-block',animation:'spin 1s linear infinite'}}>⟳</div>
+          <p style={{fontSize:'.8rem',letterSpacing:'.12em',marginBottom:'.5rem'}}>LOADING DATA…</p>
+          <p style={{fontSize:'.65rem',color:T.faint}}>
+            Fetching {ERR_FILE}<br/>and {PROD_FILE}
+          </p>
+        </div>
+      )}
+
+      {/* Error state */}
+      {!loading && loadErr && (
+        <div style={{background:dark?'rgba(220,38,38,.08)':'#fef2f2',
+          border:'1px solid rgba(220,38,38,.35)',borderRadius:12,padding:'2rem',
+          textAlign:'center',maxWidth:500,margin:'0 auto'}}>
+          <p style={{fontSize:'.85rem',color:'#dc2626',fontWeight:700,
+            fontFamily:'DM Sans,sans-serif',marginBottom:'.6rem'}}>
+            Failed to load data
+          </p>
+          <p style={{fontSize:'.7rem',color:T.muted,marginBottom:'1.25rem',lineHeight:1.6}}>
+            {loadErr}
+          </p>
+          <p style={{fontSize:'.62rem',color:T.faint,marginBottom:'1rem'}}>
+            Both files must be in the same directory as this HTML page on GitHub Pages.
+          </p>
+          <a href={HUB_URL} style={{color:'#0284c7',fontSize:'.65rem',
+            fontFamily:'DM Mono,monospace'}}>← Return to Hub</a>
+        </div>
+      )}
+
+      {/* Main content */}
+      {!loading && !loadErr && (
+        <>
+          {/* Stat cards */}
+          <div style={{display:'flex',gap:'.65rem',flexWrap:'wrap',marginBottom:'1.1rem'}}>
+            {[
+              {label:'DEPT ZONE RATE /10k',
+               value:deptZRate!=null?deptZRate.toFixed(2):'—',
+               color:deptZRate!=null?(deptZRate>3?'#dc2626':deptZRate>1.5?'#d97706':'#16a34a'):'#94a3b8'},
+              {label:'DEPT SPLIT RATE /100k',
+               value:deptSRate!=null?deptSRate.toFixed(2):'—',
+               color:deptSRate!=null?(deptSRate>15?'#dc2626':deptSRate>8?'#d97706':'#2563eb'):'#94a3b8'},
+              {label:'🔴 COACH FLAGS', value:coachCount, color:'#dc2626'},
+              {label:'⭐ STAR TIER',   value:starCount,  color:'#92400e'},
+              {label:'TOTAL TMs',      value:allRows.length, color:T.text},
+            ].map(c=>(
+              <div key={c.label} style={{flex:1,minWidth:115,
+                background:T.cardBg,border:`1px solid ${T.cardBdr}`,
+                borderRadius:10,padding:'.7rem .9rem',boxShadow:T.cardShd}}>
+                <div style={{fontSize:'.52rem',color:T.muted,letterSpacing:'.09em',marginBottom:'.3rem'}}>
+                  {c.label}
+                </div>
+                <div style={{fontSize:'1.35rem',fontWeight:800,color:c.color,
+                  fontFamily:'DM Sans,sans-serif'}}>
+                  {c.value}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Controls */}
+          <div className="no-print" style={{display:'flex',alignItems:'center',gap:'.5rem',
+            flexWrap:'wrap',marginBottom:'.85rem'}}>
+
+            {/* Period selector */}
+            <select value={selMon} onChange={e=>setSelMon(e.target.value)} style={{
+              background:T.selBg,border:`1px solid ${T.selBdr}`,color:T.selTxt,
+              borderRadius:6,padding:'.3rem .55rem',fontSize:'.68rem',
+              letterSpacing:'.03em',cursor:'pointer'}}>
+              <option value="all">All Months</option>
+              {allMons.map(m=><option key={m} value={m}>{m}</option>)}
+            </select>
+
+            {/* Shift pills */}
+            <div style={{display:'flex',gap:'.15rem',background:T.pillCont,
+              borderRadius:8,padding:'.18rem'}}>
+              {[
+                {key:'all',label:'ALL',     color:T.thAct,  bg:T.pillOn,   bdr:T.cardBdr, count:shiftCounts.all},
+                {key:'a',  label:'A-SHIFT', ...SHIFT_META.a, count:shiftCounts.a},
+                {key:'b',  label:'B-SHIFT', ...SHIFT_META.b, count:shiftCounts.b},
+                {key:'c',  label:'C-SHIFT', ...SHIFT_META.c, count:shiftCounts.c},
+              ].map(p=>{
+                const on=shiftFilt===p.key;
+                return (
+                  <button key={p.key} onClick={()=>setShiftFilt(p.key)} style={{
+                    padding:'.25rem .7rem',borderRadius:6,cursor:'pointer',
+                    fontFamily:'DM Mono,monospace',fontSize:'.62rem',fontWeight:600,
+                    letterSpacing:'.05em',border:'none',
+                    background:on?(p.key==='all'?T.pillOn:p.bg):'transparent',
+                    color:on?p.color:T.muted,transition:'all .2s'}}>
+                    {p.label}
+                    <span style={{marginLeft:'.3rem',fontSize:'.55rem',
+                      color:on?p.color:T.faint}}>{p.count}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Highlight pills */}
+            <div style={{display:'flex',gap:'.15rem',background:T.pillCont,
+              borderRadius:8,padding:'.18rem'}}>
+              {[
+                {key:'all',  label:'ALL',     color:T.thAct},
+                {key:'star', label:'⭐ STAR',  color:'#92400e'},
+                {key:'coach',label:'🔴 COACH', color:'#dc2626'},
+              ].map(p=>{
+                const on=highlight===p.key;
+                return (
+                  <button key={p.key} onClick={()=>setHighlight(p.key)} style={{
+                    padding:'.25rem .7rem',borderRadius:6,cursor:'pointer',
+                    fontFamily:'DM Mono,monospace',fontSize:'.62rem',fontWeight:600,
+                    letterSpacing:'.05em',border:'none',
+                    background:on?T.pillOn:'transparent',
+                    color:on?p.color:T.muted,transition:'all .2s'}}>
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <span style={{fontSize:'.58rem',color:T.muted}}>{rows.length} TMs</span>
+          </div>
+
+          {/* Legend */}
+          <div style={{display:'flex',alignItems:'center',gap:'.6rem',flexWrap:'wrap',
+            padding:'.45rem .7rem',borderRadius:8,
+            background:T.legBg,border:`1px solid ${T.legBdr}`,
+            marginBottom:'.75rem',fontSize:'.55rem',color:T.muted}}>
+            <span style={{letterSpacing:'.07em'}}>ZONE</span>
+            {[[0,'0'],[1,'1'],[3,'3'],[6,'6'],[8,'8+']].map(([v,l])=>(
+              <div key={l} style={{display:'flex',alignItems:'center',gap:'.2rem'}}>
+                <div style={{width:14,height:10,borderRadius:2,
+                  background:v===0?(dark?'#14352a':'#dcfce7'):zoneColor(v,dark),
+                  border:`1px solid ${T.swatchBdr}`}}/>
+                <span>{l}</span>
+              </div>
+            ))}
+            <span style={{color:T.faint,margin:'0 .15rem'}}>|</span>
+            <span style={{letterSpacing:'.07em'}}>SPLIT</span>
+            {[[0,'0'],[5,'5'],[15,'15'],[25,'25'],[30,'30+']].map(([v,l])=>(
+              <div key={l} style={{display:'flex',alignItems:'center',gap:'.2rem'}}>
+                <div style={{width:14,height:10,borderRadius:2,
+                  background:v===0?(dark?'#0f1e3a':'#eff6ff'):splitColor(v,dark),
+                  border:`1px solid ${T.swatchBdr}`}}/>
+                <span>{l}</span>
+              </div>
+            ))}
+            <span style={{color:T.faint,margin:'0 .15rem'}}>|</span>
+            <span style={{color:'#dc2626',fontWeight:700}}>▲</span><span>worse</span>
+            <span style={{color:T.muted}}>→</span><span>stable</span>
+            <span style={{color:'#16a34a',fontWeight:700}}>▼</span><span>better</span>
+            <span style={{color:T.faint,margin:'0 .15rem'}}>|</span>
+            <span>trends vs {prevLabel||'prior month'}</span>
+            <span style={{marginLeft:'auto',color:T.faint,fontSize:'.5rem'}}>
+              errors attributed by Start time date
+            </span>
+          </div>
+
+          {/* Table */}
+          <div style={{background:T.tblBg,border:`1px solid ${T.tblBdr}`,
+            borderRadius:12,overflow:'hidden',boxShadow:T.cardShd}}>
+            <div style={{overflowX:'auto'}}>
+              <table style={{width:'100%',borderCollapse:'collapse',minWidth:760}}>
+                <thead>
+                  <tr style={{background:T.thBg}}>
+                    {COLS.map(c=>{
+                      const active=sortCol===c.key;
+                      return (
+                        <th key={c.key}
+                          className={c.sortable?'sth':''}
+                          onClick={()=>c.sortable&&handleSort(c.key)}
+                          title={c.title}
+                          style={{
+                            padding:'.52rem .45rem',
+                            fontSize:'.58rem',fontWeight:600,letterSpacing:'.07em',
+                            textAlign:c.key==='str'?'left':'center',
+                            color:active?T.thAct:T.thTxt,
+                            borderBottom:`1px solid ${T.tblBdr}`,
+                            whiteSpace:'nowrap',width:c.w}}>
+                          {c.label}{active?(sortDir===-1?' ↓':' ↑'):''}
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.length===0 && (
+                    <tr>
+                      <td colSpan={COLS.length} style={{textAlign:'center',
+                        padding:'3rem',color:T.muted,fontSize:'.75rem'}}>
+                        No data for selected filters
+                      </td>
+                    </tr>
+                  )}
+                  {rows.map((r,i)=>{
+                    const isStar  = r.str>=68;
+                    const isCoach = (r.zRate!==null&&r.zRate>3)||(r.sRate!==null&&r.sRate>15);
+                    const sm      = SHIFT_META[r.sh]||{};
+                    const rowBg   = i%2===0?T.rowE:T.rowO;
+                    const bLeft   = isStar?'3px solid #2563eb':isCoach?'3px solid #dc2626':'3px solid transparent';
+                    const td = (content,extra={})=>(
+                      <td style={{padding:'.42rem .45rem',background:rowBg,
+                        borderBottom:`1px solid ${T.rowBdr}`,...extra}}>
+                        {content}
+                      </td>
+                    );
+                    return (
+                      <tr key={r.tm} className="tbl-row"
+                        style={{borderLeft:bLeft}}>
+                        {/* TM */}
+                        <td style={{padding:'.42rem .45rem',fontSize:'.7rem',fontWeight:600,
+                          background:rowBg,color:isStar?T.tmStar:T.tmNorm,
+                          borderBottom:`1px solid ${T.rowBdr}`,whiteSpace:'nowrap'}}>
+                          {isStar&&<span style={{marginRight:'.2rem',fontSize:'.58rem'}}>⭐</span>}
+                          {r.tm}
+                          {r.dept==='training'&&(
+                            <span style={{marginLeft:'.3rem',display:'inline-flex',
+                              alignItems:'center',justifyContent:'center',
+                              width:13,height:13,borderRadius:3,
+                              background:'rgba(124,58,237,.15)',border:'1px solid rgba(124,58,237,.35)',
+                              fontSize:'.44rem',fontWeight:700,color:'#7c3aed',verticalAlign:'middle'}}>
+                              T
+                            </span>
+                          )}
+                        </td>
+                        {/* STR */}
+                        {td(<StrBar pct={r.str} T={T}/>,{textAlign:'left'})}
+                        {/* VOL% */}
+                        {td(<span style={{fontSize:'.65rem',fontWeight:600,color:T.numTxt}}>{Math.round(r.vol)}</span>,{textAlign:'center'})}
+                        {/* ACC% */}
+                        {td(<span style={{fontSize:'.65rem',fontWeight:600,color:T.numTxt}}>{Math.round(r.acc)}</span>,{textAlign:'center'})}
+                        {/* ZONE rate */}
+                        <td style={{padding:'.42rem .45rem',textAlign:'center',
+                          fontSize:'.65rem',fontWeight:700,
+                          background:zoneColor(r.zRate,dark),color:zoneFg(r.zRate,dark),
+                          borderBottom:`1px solid ${T.rowBdr}`}}>
+                          {r.zRate===null?'—':r.zRate.toFixed(1)}
+                        </td>
+                        {/* ZPE */}
+                        {td(<span style={{fontSize:'.65rem',fontWeight:600,
+                          color:r.zErr>0?T.zErrTxt:T.muted}}>
+                          {r.zErr||'—'}
+                        </span>,{textAlign:'center'})}
+                        {/* SPLIT rate */}
+                        <td style={{padding:'.42rem .45rem',textAlign:'center',
+                          fontSize:'.65rem',fontWeight:700,
+                          background:splitColor(r.sRate,dark),color:splitFg(r.sRate,dark),
+                          borderBottom:`1px solid ${T.rowBdr}`}}>
+                          {r.sRate===null?'—':r.sRate.toFixed(1)}
+                        </td>
+                        {/* SPE */}
+                        {td(<span style={{fontSize:'.65rem',fontWeight:600,
+                          color:r.sErr>0?T.sErrTxt:T.muted}}>
+                          {r.sErr||'—'}
+                        </span>,{textAlign:'center'})}
+                        {/* PAL */}
+                        {td(<span style={{fontSize:'.65rem',color:T.numTxt}}>{fmtN(r.pal)}</span>,{textAlign:'center'})}
+                        {/* SC UNITS */}
+                        {td(<span style={{fontSize:'.65rem',color:T.numTxt}}>{fmtN(r.sc)}</span>,{textAlign:'center'})}
+                        {/* SCANS */}
+                        {td(<span style={{fontSize:'.65rem',color:T.numTxt}}>{fmtN(r.ps)}</span>,{textAlign:'center'})}
+                        {/* SH badge */}
+                        {td(
+                          <span style={{display:'inline-block',padding:'.1rem .3rem',
+                            borderRadius:4,fontSize:'.58rem',fontWeight:700,
+                            background:sm.bg||'transparent',color:sm.color||T.muted,
+                            border:`1px solid ${sm.bdr||'transparent'}`}}>
+                            {r.sh?r.sh.toUpperCase():'—'}
+                          </span>,{textAlign:'center'}
+                        )}
+                        {/* Z trend */}
+                        {td(<TrendCell val={r.zTrend} T={T}/>,{textAlign:'center'})}
+                        {/* S trend */}
+                        {td(<TrendCell val={r.sTrend} T={T}/>,{textAlign:'center'})}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Column guide */}
+          <div className="no-print" style={{marginTop:'.85rem'}}>
+            <button onClick={()=>setGuideOpen(o=>!o)} style={{
+              background:'none',border:'none',cursor:'pointer',color:T.muted,
+              fontFamily:'DM Mono,monospace',fontSize:'.6rem',letterSpacing:'.08em',
+              display:'flex',alignItems:'center',gap:'.3rem',padding:'.2rem 0'}}>
+              <span>{guideOpen?'▾':'▸'}</span> COLUMN GUIDE
+            </button>
+            {guideOpen&&(
+              <div style={{background:T.legBg,border:`1px solid ${T.legBdr}`,
+                borderRadius:8,padding:'.9rem',marginTop:'.4rem'}}>
+                <ColumnGuide T={T} prevLabel={prevLabel}/>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
