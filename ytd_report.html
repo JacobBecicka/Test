@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Receiving Error Report — Year to Date</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: linear-gradient(160deg, #f1f5f9, #e2e8f0);
+      --card: #ffffff;
+      --border: #e2e8f0;
+      --text1: #0f172a;
+      --text2: #475569;
+      --textm: #94a3b8;
+      --shadow: 0 2px 12px rgba(0,0,0,0.07);
+      --track: #f1f5f9;
+      --rowalt: #f8fafc;
+    }
+    body.dark {
+      --bg: linear-gradient(160deg, #0f172a, #111827);
+      --card: #111827;
+      --border: #1e293b;
+      --text1: #f1f5f9;
+      --text2: #94a3b8;
+      --textm: #64748b;
+      --shadow: 0 2px 14px rgba(0,0,0,0.35);
+      --track: #1e293b;
+      --rowalt: #0b1220;
+    }
+
+    body {
+      background: var(--bg);
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 28px 16px 60px;
+      transition: background 0.25s;
+    }
+    .wrap { max-width: 720px; margin: 0 auto; }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px 26px 22px;
+      margin-bottom: 20px;
+      box-shadow: var(--shadow);
+      transition: background 0.25s, border-color 0.25s;
+    }
+    .card-sm { padding: 14px 20px; }
+
+    .badge {
+      font-size: 10px; font-weight: 700; letter-spacing: 1.2px;
+      text-transform: uppercase; padding: 3px 10px;
+      border-radius: 20px; display: inline-block;
+    }
+    .sec-title {
+      font-size: 19px; font-weight: 800; color: var(--text1);
+      margin: 8px 0 4px; letter-spacing: -0.3px;
+    }
+    .sec-sub { font-size: 13px; color: var(--text2); }
+    .eyebrow {
+      font-size: 11px; font-weight: 700; color: var(--textm);
+      letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px;
+    }
+
+    table { width: 100%; border-collapse: collapse; }
+    td, th { padding: 8px 10px; }
+    th {
+      text-align: left; font-size: 10.5px; color: var(--textm);
+      text-transform: uppercase; letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border);
+    }
+    th.r, td.r { text-align: right; }
+    tr.alt { background: var(--rowalt); }
+
+    /* Uniform header buttons — Hub / Print / Theme — matches Weekly & Monthly reports */
+    .hdr-btn {
+      display: flex; align-items: center; gap: 6px;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 20px; padding: 7px 14px; cursor: pointer;
+      font-size: 12px; font-weight: 700; color: var(--text1);
+      box-shadow: var(--shadow); flex-shrink: 0; transition: all 0.15s;
+      text-decoration: none; white-space: nowrap;
+    }
+    .hdr-btn:hover { opacity: 0.82; }
+
+    .fy-btn {
+      padding: 6px 18px; border-radius: 20px;
+      border: 1.5px solid var(--border);
+      background: var(--card); color: var(--text2);
+      font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+    }
+    .fy-btn.active {
+      border-color: #0284C7;
+      background: color-mix(in srgb, #0284C7 10%, transparent);
+      color: #0284C7; font-weight: 800;
+    }
+
+    .tiles { display: flex; flex-wrap: wrap; gap: 10px; }
+    .tile { border-radius: 10px; padding: 9px 16px; flex: 1 1 130px; border: 1px solid transparent; }
+    .tile-lbl { font-size: 10.5px; color: var(--text2); margin-bottom: 2px; }
+    .tile-val { font-size: 17px; font-weight: 800; }
+
+    .ie-pair { background: var(--track); border-radius: 10px; padding: 10px 14px; flex: 1 1 150px; }
+    .ie-lbl { font-size: 10.5px; color: var(--text2); margin-bottom: 4px; }
+    .ie-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--textm); margin-bottom: 2px; }
+    .ie-val { font-weight: 800; font-size: 14px; }
+
+    .bar-track { width: 100%; height: 6px; border-radius: 4px; background: var(--track); overflow: hidden; }
+    .bar-fill  { height: 100%; border-radius: 4px; }
+
+    .cp-sub {
+      display: flex; justify-content: space-between;
+      margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+    }
+
+    .takeaway { margin-bottom: 14px; padding-left: 14px; border-left: 3px solid; }
+    .tw-h { font-size: 14px; font-weight: 700; color: var(--text1); margin-bottom: 3px; }
+    .tw-b { font-size: 13px; color: var(--text2); line-height: 1.5; }
+
+    .shift-tile { flex: 1; text-align: center; padding: 8px 4px; border-radius: 10px; background: var(--track); }
+    .shift-tile-lbl { font-size: 11px; color: var(--text2); }
+    .shift-tile-val { font-size: 16px; font-weight: 800; }
+    .shift-tile-pct { font-size: 11px; color: var(--textm); }
+
+    .coach-shift-lbl { font-size: 12px; font-weight: 800; margin-bottom: 6px; }
+
+    .spinner {
+      width: 44px; height: 44px;
+      border: 3px solid var(--border);
+      border-top-color: #0284C7;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-wrap {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      min-height: 60vh; gap: 16px;
+    }
+
+    .no-data { text-align: center; padding: 48px 20px; }
+    .no-data-icon { font-size: 44px; margin-bottom: 14px; }
+    .no-data-title { font-size: 17px; font-weight: 700; color: var(--text1); margin-bottom: 8px; }
+    .no-data-body { font-size: 13px; color: var(--text2); max-width: 380px; margin: 0 auto; line-height: 1.6; }
+
+    @media (max-width: 480px) {
+      body { padding: 16px 12px 40px; }
+      .card { padding: 16px 16px 14px; }
+    }
+
+    /* ===================== PRINT ===================== */
+    @media print {
+      body { background: #fff !important; padding: 0 !important; }
+      .no-print { display: none !important; }
+      .card {
+        box-shadow: none !important;
+        border: 1px solid #ccc !important;
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+      .print-break { page-break-before: always; break-before: page; }
+      * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrap"><div id="root"></div></div>
+
+<script>
+// ════════════════════════════════════════════════════════
+//  CONFIG
+// ════════════════════════════════════════════════════════
+const REPO_RAW = 'https://raw.githubusercontent.com/JacobBecicka/Receiving_Error_Dashboard/main';
+const WORKBOOK  = 'AI_Safe_Weekly_Error_Data.xlsx';
+const OUTLIER_THRESHOLD = 500; // units above this → outlier row
+
+// ════════════════════════════════════════════════════════
+//  SHIFT COLORS  (matched to WeeklyHeatMapErrorsReceiving)
+//  A = sky blue | B = soft purple | C = mint green
+// ════════════════════════════════════════════════════════
+const SC = { A:'#38BDF8', B:'#A78BFA', C:'#34D399' };
+
+// ════════════════════════════════════════════════════════
+//  STATE
+// ════════════════════════════════════════════════════════
+let darkMode   = false;
+let fyData     = {};
+let selectedFY = null;
+
+// ════════════════════════════════════════════════════════
+//  FISCAL CALENDAR
+//  Sheets are now named directly with their fiscal week, e.g.
+//  "FW1 26", "FW48 25" — the sheet name IS the fiscal week/year,
+//  so there's no calendar-week-to-fiscal-week math left to do here.
+//  fy label = "FY20{yy}", fiscal week = the number straight from
+//  the sheet name.
+// ════════════════════════════════════════════════════════
+const FW_SHEET_RE = /^FW\s*(\d+)\s+(\d+)$/i;
+
+// ════════════════════════════════════════════════════════
+//  LOAD WORKBOOK
+// ════════════════════════════════════════════════════════
+async function loadWorkbook() {
+  const url = `${REPO_RAW}/${WORKBOOK}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} — unable to fetch workbook from GitHub.`);
+  const buf = await resp.arrayBuffer();
+  return XLSX.read(buf, { type:'array' });
+}
+
+// ════════════════════════════════════════════════════════
+//  PARSE WORKBOOK  →  { FY2025:[...rows], FY2026:[...rows], FY2027:[...rows] }
+//  (object keys are built dynamically from whatever fiscal years
+//  actually appear as sheets in the workbook — no hardcoded list,
+//  so new fiscal years show up automatically as they're added.)
+// ════════════════════════════════════════════════════════
+function parseWorkbook(wb) {
+  const out = {};
+
+  wb.SheetNames.forEach(name => {
+    const m = name.match(FW_SHEET_RE);
+    if (!m) return;
+    const fiscalWeek = parseInt(m[1], 10);
+    const fy = `FY20${m[2]}`;
+    if (!out[fy]) out[fy] = [];
+
+    const ws = wb.Sheets[name];
+    const all = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
+    if (all.length < 6) return; // need header row + at least 1 data row
+
+    // Row index 4 = header (matches pandas header=4)
+    const hdr = all[4].map(h => String(h ?? '').replace(/\xa0/g,'').trim().replace(/:$/,'').replace(/\s+/g,' '));
+    const ci = n => hdr.findIndex(h => h.toLowerCase() === n.toLowerCase());
+
+    const iShift = ci('Shift');
+    const iLan   = ci('WM SIGN ON');
+    const iDept  = ci('Home Department of Processor');
+    const iCP1   = ci('Shipment Error (Checkpoint 1)');
+    const iCP2   = ci('Piece Error (Checkpoint 2)');
+    const iCP3   = ci('Carton Error (Checkpoint 3)');
+    const iCases = ci('Number of Cases');
+    const iUnits = ci('Number of Units');
+    const iCmt   = ci('Comments');
+
+    all.slice(5).forEach(row => {
+      if (!row || row.every(c => c === '' || c == null)) return;
+
+      const shiftRaw = String(row[iShift] ?? '').replace(/\xa0/g,'').trim(); const shift = shiftRaw.replace(/-?shift$/i,'').trim().toUpperCase();
+      if (!['A','B','C'].includes(shift)) return;
+
+      const parseCP = val => {
+        const s = String(val ?? '').replace(/\xa0/g,'').trim();
+        if (!s || /^no\s*errors?$/i.test(s)) return [];
+        return s.split(';').map(e => e.trim()).filter(e => e && !/^no\s*errors?$/i.test(e));
+      };
+
+      const se = parseCP(row[iCP1]);
+      const pe = parseCP(row[iCP2]);
+      const ce = parseCP(row[iCP3]);
+      if (!se.length && !pe.length && !ce.length) return;
+
+      const rawU = row[iUnits];
+      const units = (isFinite(+rawU) && +rawU > 0) ? Math.round(+rawU) : 0;
+      const cases = parseCases(String(row[iCases] ?? '').trim());
+
+      out[fy].push({
+        fiscalWeek, fy, shift,
+        lanId:    String(row[iLan]  ?? '').replace(/\xa0/g,'').trim(),
+        dept:     String(row[iDept] ?? '').replace(/\xa0/g,'').trim(),
+        comments: String(row[iCmt]  ?? '').replace(/\xa0/g,'').trim(),
+        shipmentErrors: se,
+        pieceErrors:    pe,
+        cartonErrors:   ce,
+        units, cases,
+      });
+    });
+  });
+
+  return out;
+}
+
+function parseCases(raw) {
+  if (!raw || raw === '0') return 0;
+  if (/totes?|boxes?/i.test(raw)) return 0;   // exclude totes & boxes
+  if (/\+|plus/i.test(raw)) return 0;          // exclude "plus"-qualified
+  const n = parseInt(raw.replace(/[^\d]/g,''), 10);
+  return isNaN(n) ? 0 : n;
+}
+
+// ════════════════════════════════════════════════════════
+//  AGGREGATE  →  dashboard data object
+// ════════════════════════════════════════════════════════
+function aggregate(rows) {
+  if (!rows || !rows.length) return null;
+
+  const total = rows.length;
+  const weeks = [...new Set(rows.map(r => r.fiscalWeek))].sort((a,b)=>a-b);
+  const weeksLabel = weeks.length === 1
+    ? `Week ${weeks[0]}`
+    : `Weeks ${weeks[0]}–${weeks[weeks.length-1]}`;
+
+  // Shift counts
+  const shiftErrors = { A:0, B:0, C:0 };
+  rows.forEach(r => { if (r.shift in shiftErrors) shiftErrors[r.shift]++; });
+
+  // Checkpoint breakdown
+  const cpC = { shipment:{}, piece:{}, carton:{} };
+  rows.forEach(r => {
+    r.shipmentErrors.forEach(e => { cpC.shipment[e] = (cpC.shipment[e]||0)+1; });
+    r.pieceErrors.forEach(e =>    { cpC.piece[e]    = (cpC.piece[e]   ||0)+1; });
+    r.cartonErrors.forEach(e =>   { cpC.carton[e]   = (cpC.carton[e]  ||0)+1; });
+  });
+  const toArr = obj => Object.entries(obj)
+    .map(([name,value]) => ({name,value}))
+    .sort((a,b) => b.value - a.value);
+  const shipment = toArr(cpC.shipment);
+  const piece    = toArr(cpC.piece);
+  const carton   = toArr(cpC.carton);
+
+  // Outliers
+  const isOut = r => r.units >= OUTLIER_THRESHOLD;
+  const outlierRows    = rows.filter(isOut);
+  const nonOutlierRows = rows.filter(r => !isOut(r));
+  const sum = (arr, fn) => arr.reduce((s,r) => s + (fn(r)||0), 0);
+
+  const unitsIncl = sum(rows, r=>r.units);
+  const unitsExcl = sum(nonOutlierRows, r=>r.units);
+  const casesIncl = sum(rows, r=>r.cases);
+  const casesExcl = sum(nonOutlierRows, r=>r.cases);
+
+  const shiftVolume = {};
+  ['A','B','C'].forEach(s => {
+    const sr  = rows.filter(r => r.shift===s);
+    const snr = nonOutlierRows.filter(r => r.shift===s);
+    shiftVolume[s] = {
+      unitsIncl: sum(sr,  r=>r.units), unitsExcl: sum(snr, r=>r.units),
+      casesIncl: sum(sr,  r=>r.cases), casesExcl: sum(snr, r=>r.cases),
+    };
+  });
+
+  // Outlier display list
+  const outliers = outlierRows.map(r => ({
+    week: r.fiscalWeek, shift: r.shift, units: r.units, cases: r.cases,
+    desc: r.comments
+      ? r.comments.substring(0,130) + (r.comments.length>130?'…':'')
+      : 'Large-volume error row — see source workbook for details.',
+  }));
+
+  // SKU Maintenance breakdown by comment text
+  const skuRows  = rows.filter(r => r.shipmentErrors.some(e => /sku\s*maint/i.test(e)));
+  const skuTotal = skuRows.length;
+  const sc = { A:{c:0,uI:0,uE:0}, B:{c:0,uI:0,uE:0}, C:{c:0,uI:0,uE:0} };
+  skuRows.forEach(r => {
+    const cat = skuCategory(r.comments);
+    sc[cat].c++;
+    sc[cat].uI += r.units;
+    if (!isOut(r)) sc[cat].uE += r.units;
+  });
+  const skuBreakdown = [
+    { name:'Not Maintained / Left Blank / Incomplete', value:sc.A.c, color:'#DC2626',
+      unitsIncl:sc.A.uI, unitsExcl:sc.A.uE,
+      note:'SKU was never filled in — "left blank," "left incomplete," "not set up and/or maintained," etc.' },
+    { name:'Maintained — but the Wrong Value',         value:sc.B.c, color:'#0284C7',
+      unitsIncl:sc.B.uI, unitsExcl:sc.B.uE,
+      note:'SKU was maintained, just incorrectly — wrong putaway type (W/N12/N6), wrong department, wrong box size, or wrong conveyable flag.' },
+    { name:'Other / Unclear from Comment',             value:sc.C.c, color:'#94A3B8',
+      unitsIncl:sc.C.uI, unitsExcl:sc.C.uE,
+      note:"Comment doesn't clearly describe a blank vs. wrong-value pattern." },
+  ].filter(d => d.value > 0);
+
+  // Coaching candidates
+  const coaching = {};
+  ['A','B','C'].forEach(s => {
+    coaching[s] = computeCoaching(rows.filter(r => r.shift === s));
+  });
+
+  return {
+    total, weeksLabel, shiftErrors,
+    shipment, piece, carton,
+    outliers, unitsIncl, unitsExcl, casesIncl, casesExcl,
+    shiftVolume, skuTotal, skuBreakdown, coaching,
+  };
+}
+
+function skuCategory(comment) {
+  const c = String(comment).toLowerCase();
+  if (/not maintained|left blank|left incomplete|not set.?up|sku not|never maintained|missing sku|no sku|not filled|not entered|blank sku/i.test(c))
+    return 'A';
+  if (/maintained.*(incorrect|as |with )|wrong|should be|s\/b|instead of|putaway|n12\b|n6\b|wide\b|conveyable|department|dept|\bacc\b|\bapp\b|\bcag\b|\bjwl\b|box size/i.test(c))
+    return 'B';
+  return 'C';
+}
+
+function computeCoaching(rows) {
+  const map = {};
+  rows.forEach(r => {
+    const id = r.lanId;
+    if (!id || /^nan$/i.test(id)) return;
+    if (!map[id]) map[id] = { types:{}, total:0 };
+    [...r.shipmentErrors, ...r.pieceErrors, ...r.cartonErrors].forEach(e => {
+      map[id].types[e] = (map[id].types[e]||0) + 1;
+      map[id].total++;
+    });
+  });
+  return Object.entries(map)
+    .map(([id,d]) => {
+      const top = Object.entries(d.types).sort((a,b)=>b[1]-a[1])[0];
+      if (!top || top[1] < 2) return null;
+      return { id, errorType:top[0], repeatCount:top[1], totalErrors:d.total };
+    })
+    .filter(Boolean)
+    .sort((a,b) => b.repeatCount - a.repeatCount)
+    .slice(0, 2);
+}
+
+// ════════════════════════════════════════════════════════
+//  TAKEAWAY GENERATOR  (rule-based, no AI)
+// ════════════════════════════════════════════════════════
+function generateTakeaways(d) {
+  const shifts   = Object.entries(d.shiftErrors).sort((a,b)=>b[1]-a[1]);
+  const busiest  = shifts[0];
+  const quietest = shifts[shifts.length-1];
+  const shipTotal = d.shipment.reduce((s,r)=>s+r.value,0);
+  const outlierUnits = d.unitsIncl - d.unitsExcl;
+  const outlierPct   = d.unitsIncl > 0 ? Math.round((outlierUnits/d.unitsIncl)*100) : 0;
+  const topSku = d.skuBreakdown[0];
+
+  const out = [
+    {
+      h: `${busiest[0]}-Shift leads YTD — ${pct(busiest[1],d.total)} of all errors`,
+      b: `${busiest[0]}-Shift logged ${fmt(busiest[1])} errors through ${d.weeksLabel}. ` +
+         `${quietest[0]}-Shift remains lowest at ${fmt(quietest[1])} (${pct(quietest[1],d.total)}) — ` +
+         `a ${fmt(busiest[1]-quietest[1])}-error gap between the two.`,
+      color: SC[busiest[0]],
+    },
+    {
+      h: `Shipment checkpoint accounts for ${pct(shipTotal,d.total)} of all errors`,
+      b: d.shipment.length
+        ? `${d.shipment[0].name} alone is ${pct(d.shipment[0].value,d.total)} of every error logged YTD ` +
+          `(${fmt(d.shipment[0].value)} total).` +
+          (topSku ? ` Of those, ${pct(topSku.value,d.skuTotal)} involve a SKU that was never maintained at all.` : '')
+        : 'Shipment errors lead across checkpoints.',
+      color: '#0284C7',
+    },
+  ];
+
+  if (d.outliers.length) {
+    out.push({
+      h: `${d.outliers.length} outlier row${d.outliers.length>1?'s':''} inflate unit totals by ${outlierPct}%`,
+      b: `Excluding ${d.outliers.map(o=>`Week ${o.week}`).join(' and ')} (${fmt(outlierUnits)} units combined), ` +
+         `YTD impacted units drop from ${fmt(d.unitsIncl)} to ${fmt(d.unitsExcl)}. ` +
+         `Case totals barely move — outlier rows typically log only a handful of cases each.`,
+      color: '#DC2626',
+    });
+  }
+  return out;
+}
+
+// ════════════════════════════════════════════════════════
+//  HELPERS
+// ════════════════════════════════════════════════════════
+const fmt = n => n != null ? n.toLocaleString() : '—';
+const pct = (n,d) => d ? ((n/d)*100).toFixed(1)+'%' : '—';
+const esc = s => String(s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+
+// ════════════════════════════════════════════════════════
+//  SVG DONUT  (no arc labels — tile strip carries the numbers)
+// ════════════════════════════════════════════════════════
+function polar(cx,cy,r,deg) {
+  const rad = ((deg-90)*Math.PI)/180;
+  return { x: cx + r*Math.cos(rad), y: cy + r*Math.sin(rad) };
+}
+function buildDonut(data, total) {
+  const W=280, H=200, cx=W/2, cy=H/2, outerR=80, innerR=50;
+  let angle=0, paths='';
+  data.forEach(d => {
+    const slice = (d.value/total)*360;
+    if (slice < 0.1) return;
+    const o1=polar(cx,cy,outerR,angle), o2=polar(cx,cy,outerR,angle+slice-0.5);
+    const i1=polar(cx,cy,innerR,angle+slice-0.5), i2=polar(cx,cy,innerR,angle);
+    const lg = (slice-0.5)>180?1:0, f=n=>n.toFixed(2);
+    paths += `<path d="M${f(o1.x)} ${f(o1.y)} A${outerR} ${outerR} 0 ${lg} 1 ${f(o2.x)} ${f(o2.y)} L${f(i1.x)} ${f(i1.y)} A${innerR} ${innerR} 0 ${lg} 0 ${f(i2.x)} ${f(i2.y)} Z" fill="${d.color}"/>`;
+    angle += slice;
+  });
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${paths}</svg>`;
+}
+
+// ════════════════════════════════════════════════════════
+//  RENDER FUNCTIONS
+// ════════════════════════════════════════════════════════
+function renderLoading() {
+  return `<div class="card loading-wrap">
+    <div class="spinner"></div>
+    <div style="color:var(--text2);font-size:14px;font-weight:500">Loading workbook from GitHub…</div>
+  </div>`;
+}
+
+function renderFetchError(msg) {
+  return `<div class="card" style="text-align:center;padding:40px 20px">
+    <div style="font-size:40px;margin-bottom:12px">⚠️</div>
+    <div style="font-size:15px;font-weight:700;color:var(--text1);margin-bottom:8px">Unable to load workbook</div>
+    <div style="font-size:13px;color:var(--text2);max-width:400px;margin:0 auto;line-height:1.5">${esc(msg)}</div>
+    <button onclick="init()" style="margin-top:18px;padding:8px 22px;border-radius:20px;border:1.5px solid #0284C7;background:transparent;color:#0284C7;font-weight:700;cursor:pointer;font-size:13px">↺ Retry</button>
+  </div>`;
+}
+
+function renderHeader() {
+  return `<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:22px;flex-wrap:wrap;gap:10px">
+    <div style="display:flex;gap:8px;align-items:center">
+      <a class="hdr-btn" href="index.html">← Hub</a>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="hdr-btn" onclick="window.print()">🖨️ Print / Save PDF</button>
+      <button class="hdr-btn" onclick="toggleTheme()">${darkMode?'☀️ Light':'🌙 Dark'}</button>
+    </div>
+  </div>
+  <div style="margin-bottom:22px">
+    <div class="eyebrow">Receiving Research Error Form</div>
+    <h1 style="font-size:26px;font-weight:800;color:var(--text1);letter-spacing:-0.5px">
+      Receiving Error Report — Year to Date
+    </h1>
+  </div>`;
+}
+
+function renderFYSelector(keys) {
+  const btns = keys.map(k => {
+    const weeksInFY = [...new Set((fyData[k]||[]).map(r=>r.fiscalWeek))];
+    const partial = weeksInFY.length > 0 && weeksInFY.length < 52;
+    return `<button class="fy-btn${k===selectedFY?' active':''}" onclick="selectFY('${k}')">
+      ${k}${partial?` <span style="font-size:9px;opacity:.65;font-weight:600">Partial</span>`:''}
+    </button>`;
+  }).join('');
+  return `<div class="card card-sm no-print" style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span style="font-size:12px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px">Fiscal Year</span>
+      <div style="display:flex;gap:8px">${btns}</div>
+    </div>
+  </div>`;
+}
+
+function renderNoData() {
+  return `<div class="card"><div class="no-data">
+    <div class="no-data-icon">📂</div>
+    <div class="no-data-title">No data loaded for ${selectedFY}</div>
+    <div class="no-data-body">
+      No error records were found for this fiscal year in the workbook.
+      Commit populated sheets to the repo and this page will update automatically on next load.
+    </div>
+  </div></div>`;
+}
+
+function renderSummary(d) {
+  const busiest  = Object.entries(d.shiftErrors).sort((a,b)=>b[1]-a[1])[0];
+  const shipTotal = d.shipment.reduce((s,r)=>s+r.value,0);
+  const tiles = [
+    { lbl:'Total Errors YTD', val:fmt(d.total),    color:'#16A34A', bg:darkMode?'#16A34A22':'#dcfce7' },
+    { lbl:'Busiest Shift',    val:`${busiest[0]} (${pct(busiest[1],d.total)})`, color:SC[busiest[0]], bg:SC[busiest[0]]+'22' },
+    { lbl:'Top Checkpoint',   val:'Shipment',       color:'#0284C7', bg:darkMode?'#0284C722':'#e0f2fe' },
+    { lbl:'Units Impacted',   val:fmt(d.unitsIncl), color:'#DC2626', bg:darkMode?'#DC262622':'#fee2e2' },
+  ].map(t=>`<div class="tile" style="background:${t.bg};border-color:${t.color}30">
+    <div class="tile-lbl">${t.lbl}</div>
+    <div class="tile-val" style="color:${t.color}">${esc(t.val)}</div>
+  </div>`).join('');
+  return `<div class="card" style="padding:18px 20px">
+    <div class="eyebrow" style="margin-bottom:2px">${esc(selectedFY)} — Summary</div>
+    <div class="tiles" style="margin-top:8px">${tiles}</div>
+    <p style="font-size:12.5px;color:var(--text2);margin-top:12px;line-height:1.5">
+      ${fmt(d.total)} logged errors across ${d.weeksLabel}. Shipment checkpoint errors lead at ${pct(shipTotal,d.total)},
+      driven mainly by ${esc(d.shipment[0]?.name||'SKU Maintenance errors')}.
+      ${d.outliers.length ? `${d.outliers.length > 1 ? 'Two outlier rows account' : 'One outlier row accounts'} for ${fmt(d.unitsIncl-d.unitsExcl)} of the ${fmt(d.unitsIncl)} units impacted YTD — see Impacted Units &amp; Cases below.` : ''}
+    </p>
+  </div>`;
+}
+
+function renderShiftChart(d) {
+  const pieData = ['A','B','C'].map(s=>({name:`${s}-Shift`,value:d.shiftErrors[s],color:SC[s]}));
+  const donut   = buildDonut(pieData, d.total);
+  const tiles   = ['A','B','C'].map(s=>`
+    <div class="shift-tile">
+      <div class="shift-tile-lbl">${s}-Shift</div>
+      <div class="shift-tile-val" style="color:${SC[s]}">${d.shiftErrors[s]}</div>
+      <div class="shift-tile-pct">${pct(d.shiftErrors[s],d.total)}</div>
+    </div>`).join('');
+  return `<div class="card">
+    <span class="badge" style="color:#7C3AED;background:${darkMode?'#7C3AED22':'#ede9fe'}">By Shift</span>
+    <div class="sec-title">Error Volume by Shift</div>
+    <div class="sec-sub">Count and share of total errors — ${d.weeksLabel}</div>
+    <div style="display:flex;justify-content:center;margin:18px 0 10px">${donut}</div>
+    <div style="display:flex;gap:10px">${tiles}</div>
+  </div>`;
+}
+
+function renderCheckpoints(d) {
+  const section = (label, rows, mt) => {
+    if (!rows.length) return '';
+    const sub = rows.reduce((s,r)=>s+r.value,0);
+    const trs = rows.map((r,i)=>`<tr class="${i%2?'alt':''}">
+      <td>${esc(r.name)}</td>
+      <td class="r" style="font-weight:700;color:var(--text1)">${r.value}</td>
+      <td class="r" style="color:var(--textm);width:64px">${pct(r.value,d.total)}</td>
+    </tr>`).join('');
+    return `<div style="font-size:13px;font-weight:800;color:var(--text1);margin-top:${mt}px">${label}</div>
+    <table style="font-size:13.5px;margin-top:10px"><tbody>${trs}</tbody></table>
+    <div class="cp-sub">
+      <span style="font-size:12px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px">Checkpoint subtotal</span>
+      <span style="font-size:15px;font-weight:800;color:#0284C7">${sub} <span style="color:var(--textm);font-weight:600;font-size:12px">(${pct(sub,d.total)})</span></span>
+    </div>`;
+  };
+  return `<div class="card print-break">
+    <span class="badge" style="color:#0284C7;background:${darkMode?'#0284C722':'#e0f2fe'}">Checkpoints</span>
+    <div class="sec-title">Errors by Checkpoint Sub-Category</div>
+    <div class="sec-sub">The specific error logged at each checkpoint</div>
+    ${section('Shipment Error Check', d.shipment, 4)}
+    ${section('Piece Error Check',    d.piece,    18)}
+    ${section('Carton Error Check',   d.carton,   18)}
+  </div>`;
+}
+
+function renderVolume(d) {
+  const outlierBlock = d.outliers.length ? `
+    <div style="background:${darkMode?'#DC262615':'#fef2f2'};border:1px solid ${darkMode?'#DC262640':'#fecaca'};border-radius:12px;padding:12px 14px;margin-bottom:16px">
+      <div style="font-size:11px;font-weight:800;color:#DC2626;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
+        ⚠ Significant outliers — ${d.outliers.length} row${d.outliers.length>1?'s':''}
+      </div>
+      ${d.outliers.map(o=>`<div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin-bottom:6px">
+        <strong style="color:var(--text1)">Week ${o.week}, ${o.shift}-Shift</strong>: ${esc(o.desc)} — ${fmt(o.units)} units, ${o.cases} cases.
+      </div>`).join('')}
+    </div>` : '';
+
+  const pairs = [
+    {lbl:'Total Units (YTD)', incl:d.unitsIncl, excl:d.unitsExcl},
+    {lbl:'Total Cases (YTD)', incl:d.casesIncl, excl:d.casesExcl},
+  ].map(p=>`<div class="ie-pair">
+    <div class="ie-lbl">${p.lbl}</div>
+    <div class="ie-row"><span>Incl. outliers</span><span class="ie-val" style="color:#DC2626">${fmt(p.incl)}</span></div>
+    <div class="ie-row"><span>Excl. outliers</span><span class="ie-val" style="color:var(--text2)">${fmt(p.excl)}</span></div>
+  </div>`).join('');
+
+  const shiftTrs = ['A','B','C'].map((s,i)=>{
+    const v=d.shiftVolume[s];
+    return `<tr class="${i%2?'alt':''}">
+      <td style="font-weight:700;color:${SC[s]}">${s}-Shift</td>
+      <td class="r">${fmt(v.unitsIncl)} <span style="color:var(--textm);font-size:11px">(${pct(v.unitsIncl,d.unitsIncl)})</span></td>
+      <td class="r">${fmt(v.unitsExcl)} <span style="color:var(--textm);font-size:11px">(${pct(v.unitsExcl,d.unitsExcl)})</span></td>
+      <td class="r">${fmt(v.casesIncl)} <span style="color:var(--textm);font-size:11px">(${pct(v.casesIncl,d.casesIncl)})</span></td>
+    </tr>`;
+  }).join('');
+
+  return `<div class="card">
+    <span class="badge" style="color:#DC2626;background:${darkMode?'#DC262622':'#fee2e2'}">Volume Impact</span>
+    <div class="sec-title">Impacted Units &amp; Cases</div>
+    <div class="sec-sub">Total units/cases touched by errors YTD, shown with and without large outliers</div>
+    <div style="margin-top:18px">${outlierBlock}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:18px">${pairs}</div>
+    <div style="font-size:13px;font-weight:800;color:var(--text1);margin-bottom:8px">By Shift</div>
+    <table style="font-size:12.5px">
+      <thead><tr>
+        <th>Shift</th><th class="r">Units (incl.)</th><th class="r">Units (excl.)</th><th class="r">Cases</th>
+      </tr></thead>
+      <tbody>${shiftTrs}</tbody>
+    </table>
+    <p style="font-size:11.5px;color:var(--textm);margin-top:10px;line-height:1.4">
+      "Cases" totals count only literal numeric case entries from the source log (totes and boxes excluded).
+    </p>
+  </div>`;
+}
+
+function renderCoaching(d) {
+  const blocks = ['A','B','C'].map(s => {
+    const list = d.coaching[s];
+    if (!list || !list.length) {
+      return `<div style="margin-bottom:16px">
+        <div class="coach-shift-lbl" style="color:${SC[s]}">${s}-Shift</div>
+        <div style="font-size:13px;color:var(--textm);padding:6px 0">No candidates meeting the 2+ repeat threshold this period.</div>
+      </div>`;
+    }
+    const trs = list.map((p,i)=>`<tr class="${i%2?'alt':''}">
+      <td style="font-weight:700;color:var(--text1);width:28%">${esc(p.id)}</td>
+      <td style="color:var(--text2)">
+        Retrain: <strong style="color:var(--text1)">${esc(p.errorType)}</strong>
+        <div style="font-size:11px;color:var(--textm);margin-top:2px">
+          Repeated ${p.repeatCount}× of their ${p.totalErrors} total YTD errors
+        </div>
+      </td>
+    </tr>`).join('');
+    return `<div style="margin-bottom:16px">
+      <div class="coach-shift-lbl" style="color:${SC[s]}">${s}-Shift</div>
+      <table style="font-size:13px"><tbody>${trs}</tbody></table>
+    </div>`;
+  }).join('');
+
+  return `<div class="card print-break">
+    <span class="badge" style="color:#B45309;background:${darkMode?'#B4530922':'#fef3c7'}">Coaching</span>
+    <div class="sec-title">Coaching Focus — Top 2 per Shift</div>
+    <div class="sec-sub">Selected by most-repeated single error type (2+ occurrences). WM Sign-On IDs — Processor Name column is blank in the AI-Safe source file.</div>
+    <div style="margin-top:18px">${blocks}</div>
+  </div>`;
+}
+
+function renderAnalysis(d) {
+  const takeaways = generateTakeaways(d);
+  const twHtml = takeaways.map(t=>`
+    <div class="takeaway" style="border-left-color:${t.color}">
+      <div class="tw-h">${esc(t.h)}</div>
+      <div class="tw-b">${esc(t.b)}</div>
+    </div>`).join('');
+
+  let skuHtml = '';
+  if (d.skuTotal > 0 && d.skuBreakdown.length) {
+    const skuRows = d.skuBreakdown.map((r,i)=>{
+      const barW = pct(r.value,d.skuTotal);
+      const unitLine = r.unitsIncl === r.unitsExcl
+        ? `<span style="font-weight:700;color:var(--text1)">${fmt(r.unitsIncl)} units</span>`
+        : `<span style="font-weight:700;color:var(--text1)">${fmt(r.unitsIncl)} incl. outlier</span> <span style="color:var(--textm);font-weight:500">/ ${fmt(r.unitsExcl)} excl.</span>`;
+      return `<div style="margin-bottom:${i<d.skuBreakdown.length-1?14:0}px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+          <span style="font-size:13px;font-weight:700;color:var(--text1)">${esc(r.name)}</span>
+          <span style="font-size:13px;font-weight:800;color:${r.color}">${r.value} <span style="color:var(--textm);font-weight:600;font-size:11.5px">(${pct(r.value,d.skuTotal)})</span></span>
+        </div>
+        <div class="bar-track"><div class="bar-fill" style="width:${barW};background:${r.color}"></div></div>
+        <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:11.5px;color:var(--text2)">
+          <span>Units impacted</span>${unitLine}
+        </div>
+        <div style="font-size:11.5px;color:var(--textm);margin-top:4px;line-height:1.4">${esc(r.note)}</div>
+      </div>`;
+    }).join('');
+
+    const top  = d.skuBreakdown[0];
+    const bot  = d.skuBreakdown[1];
+    const callout = top && bot ? `<div style="margin-top:14px;background:${darkMode?'#0284C718':'#e0f2fe'};border:1px solid ${darkMode?'#0284C740':'#bae6fd'};border-radius:10px;padding:10px 12px;font-size:12.5px;color:var(--text2);line-height:1.5">
+      <strong style="color:var(--text1)">#1 — Not maintained at all:</strong> ${pct(top.value,d.skuTotal)} of SKU Maintenance errors,
+      impacting ${fmt(top.unitsIncl)} units (${fmt(top.unitsExcl)} excluding large outliers).
+      <strong style="color:var(--text1)"> #2 — Maintained with the wrong value:</strong> ${pct(bot.value,d.skuTotal)} (${fmt(bot.unitsIncl)} units),
+      led by wrong putaway/box type (W vs. N12 vs. N6), then wrong department code (ACC/APP/CAG/JWL).
+    </div>` : '';
+
+    skuHtml = `<div style="margin-top:20px;padding-top:18px;border-top:1px solid var(--border)">
+      <div style="font-size:13px;font-weight:800;color:var(--text1);margin-bottom:2px">
+        SKU Maintenance Error Breakdown — by Comment Text
+      </div>
+      <p style="margin:0 0 12px;font-size:12px;color:var(--text2);line-height:1.5">
+        All ${d.skuTotal} SKU Maintenance Incorrect/Incomplete flags, categorized by what the processor's comment actually describes.
+      </p>
+      ${skuRows}${callout}
+    </div>`;
+  }
+
+  return `<div class="card">
+    <span class="badge" style="color:#16A34A;background:${darkMode?'#16A34A22':'#dcfce7'}">Analysis</span>
+    <div class="sec-title">Key Takeaways</div>
+    <div style="margin-top:18px">${twHtml}</div>
+    ${skuHtml}
+  </div>`;
+}
+
+// ════════════════════════════════════════════════════════
+//  MAIN RENDER
+// ════════════════════════════════════════════════════════
+function render() {
+  document.body.classList.toggle('dark', darkMode);
+  const root = document.getElementById('root');
+  const fyKeys = Object.keys(fyData).sort().reverse(); // newest fiscal year first
+  const rows = fyData[selectedFY] || [];
+  const d    = rows.length ? aggregate(rows) : null;
+
+  root.innerHTML =
+    renderHeader() +
+    renderFYSelector(fyKeys) +
+    (d ? [
+      renderSummary(d),
+      renderShiftChart(d),
+      renderCheckpoints(d),
+      renderVolume(d),
+      renderCoaching(d),
+      renderAnalysis(d),
+    ].join('') : renderNoData());
+}
+
+// ════════════════════════════════════════════════════════
+//  EVENT HANDLERS
+// ════════════════════════════════════════════════════════
+function toggleTheme() { darkMode = !darkMode; render(); }
+function selectFY(fy)  { selectedFY = fy; render(); }
+
+// ════════════════════════════════════════════════════════
+//  INIT
+// ════════════════════════════════════════════════════════
+async function init() {
+  document.getElementById('root').innerHTML = renderLoading();
+  try {
+    const wb = await loadWorkbook();
+    fyData = parseWorkbook(wb);
+    // Auto-select highest FY with data
+    const withData = Object.keys(fyData).filter(k=>fyData[k].length>0).sort().reverse();
+    selectedFY = withData.length ? withData[0] : (Object.keys(fyData).sort().reverse()[0] || null);
+    render();
+  } catch (err) {
+    console.error(err);
+    document.getElementById('root').innerHTML = renderFetchError(err.message);
+  }
+}
+
+init();
+</script>
+</body>
+</html>
