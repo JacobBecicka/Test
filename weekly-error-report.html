@@ -273,6 +273,14 @@ function isNoError(v) {
   return !s || s === "no errors" || s === "no error";
 }
 
+// FYI / non-assessed comment detection. Column S (0-based index 18) holds
+// the researcher's comment. Rows flagged FYI are excluded from unique-LanID
+// counts here (per Jacob: exclude FYI/not-an-error from this view).
+function isFyiComment(v) {
+  const s = String(v || "").trim().toLowerCase();
+  return s.includes("fyi") || s.includes("not an error");
+}
+
 function parseWeek(wb, sheetName) {
   if (!wb.SheetNames.includes(sheetName)) return null;
   const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header:1, defval:"" });
@@ -330,28 +338,35 @@ function parseWeek(wb, sheetName) {
   };
 }
 
-// Receiving-home-department-only error counts by shift, for a single fiscal week.
-// Uses the same per-row assessed-error rule as parseWeek's "total" (one count per
-// row that has any checkpoint entry), filtered to dept === Receiving.
+// Receiving-home-department-only UNIQUE LanID counts by shift, for a single
+// fiscal week. Counts how many distinct processors (LanIDs) received at
+// least one error that week, per shift — not how many error rows were
+// logged. FYI / "not an error" commented rows (column S, index 18) are
+// excluded entirely, matching the assessed-incident exclusion rule but
+// applied here to unique-person counts as well.
 function parseWeekReceivingByShift(wb, sheetName) {
   if (!wb.SheetNames.includes(sheetName)) return null;
   const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header:1, defval:"" });
   if (!rows || rows.length < 6) return null;
   const dataRows = rows.slice(5).filter(r => r && String(r[6]||"").trim());
-  const shiftC = { A:0, B:0, C:0 };
+  const uniqueLan = { A: new Set(), B: new Set(), C: new Set() };
   dataRows.forEach(row => {
-    const shift = String(row[9] ||"").replace(/\xa0/g,"").trim();
-    const dept  = String(row[10]||"").replace(/\xa0/g,"").trim().toLowerCase();
-    const se    = String(row[11]||"").trim();
-    const pe    = String(row[12]||"").trim();
-    const ce    = String(row[13]||"").trim();
+    const shift   = String(row[9] ||"").replace(/\xa0/g,"").trim();
+    const dept    = String(row[10]||"").replace(/\xa0/g,"").trim().toLowerCase();
+    const wm      = String(row[6] ||"").trim();
+    const se      = String(row[11]||"").trim();
+    const pe      = String(row[12]||"").trim();
+    const ce      = String(row[13]||"").trim();
+    const comment = String(row[18]||"").trim();
     const sk = /^a(-?shift)?$/i.test(shift)?"A":/^b(-?shift)?$/i.test(shift)?"B":/^c(-?shift)?$/i.test(shift)?"C":null;
     if (!sk) return;
     if (!dept.includes("receiv")) return;
     if (isNoError(se) && isNoError(pe) && isNoError(ce)) return;
-    shiftC[sk]++;
+    if (isFyiComment(comment)) return;
+    if (!wm) return;
+    uniqueLan[sk].add(wm);
   });
-  return shiftC;
+  return { A: uniqueLan.A.size, B: uniqueLan.B.size, C: uniqueLan.C.size };
 }
 
 // Both rolling builders now walk backward through the chronologically sorted
@@ -820,8 +835,8 @@ function App() {
         {receivingRolling.length >= 2 && (
           <Card t={t}>
             <SectionHeader t={t} eyebrow="By Shift · Receiving Only" eyebrowColor="#0284C7" eyebrowBg={dark?"#0284C722":"#e0f2fe"}
-              title="Receiving Processor Errors by Shift"
-              subtitle={`${receivingRolling[0].label} – ${receivingRolling[receivingRolling.length-1].label} · Receiving home department only, current counting rules`} />
+              title="Receiving Unique Processors Impacted by Shift"
+              subtitle={`${receivingRolling[0].label} – ${receivingRolling[receivingRolling.length-1].label} · Receiving home department only · unique LanIDs with 1+ assessed error, FYI/not-an-error excluded`} />
             <MultiLineChart data={receivingRolling} t={t} />
             <div style={{ display:"flex", gap:16, marginTop:12, justifyContent:"center" }}>
               {["A","B","C"].map(k => (
