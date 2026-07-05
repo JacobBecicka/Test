@@ -190,9 +190,19 @@ function BarChartSVG({ data, t }) {
   );
 }
 
-function MultiLineChart({ data, t }) {
-  // Renders up to 3 lines (A/B/C shift) over the provided week window.
-  const W = 360, H = 130, padL = 26, padR = 10, padT = 14, padB = 26;
+// LOS_COLOR is deliberately distinct from all three shift colors so the
+// overlay line reads as "a different kind of measurement," not a 4th shift.
+const LOS_COLOR = "#F59E0B"; // amber
+
+function MultiLineChart({ data, t, showLOS }) {
+  // Renders up to 3 lines (A/B/C shift) on a left axis, plus an optional
+  // LOS overlay on an independent right axis. The two axes are scaled
+  // separately on purpose — LOS lives in a tight 80-100ish band while
+  // unique-processor counts range 0-25+, so sharing one scale would either
+  // flatten the LOS line to nothing or blow up the shift lines. Each axis
+  // is auto-ranged to its own data so neither series visually distorts
+  // the other.
+  const W = 360, H = 130, padL = 26, padR = showLOS ? 30 : 10, padT = 14, padB = 26;
   const max = Math.max(1, ...data.flatMap(d => [d.A, d.B, d.C]));
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
@@ -205,6 +215,21 @@ function MultiLineChart({ data, t }) {
     { key: "C", color: SHIFT_COLORS.C },
   ];
   const gridVals = [0, 0.5, 1].map(f => Math.round(max * f));
+
+  // Right-axis (LOS) domain: auto-ranged to the actual LOS values present,
+  // padded and rounded to the nearest 5, so the LOS line uses its full own
+  // vertical range rather than being squashed into the left axis's scale.
+  const losVals = showLOS ? data.map(d => d.los).filter(v => v !== null && v !== undefined) : [];
+  let losMin = 0, losMax = 100;
+  if (losVals.length) {
+    const rawMin = Math.min(...losVals), rawMax = Math.max(...losVals);
+    losMin = Math.max(0, Math.floor((rawMin - 2) / 5) * 5);
+    losMax = Math.min(100, Math.ceil((rawMax + 2) / 5) * 5);
+    if (losMax === losMin) losMax = losMin + 5;
+  }
+  const yForLOS = v => padT + innerH * (1 - (v - losMin) / (losMax - losMin));
+  const losGridVals = [losMin, (losMin + losMax) / 2, losMax];
+
   return (
     <svg width="100%" viewBox={`0 0 ${W} ${H + 20}`} style={{ display: "block", margin: "0 auto" }}>
       {[0, 0.25, 0.5, 0.75, 1].map(f => {
@@ -215,6 +240,13 @@ function MultiLineChart({ data, t }) {
       {gridVals.map((v, i) => (
         <text key={i} x={padL - 6} y={yFor(v) + 3} textAnchor="end" fontSize={9} fill={t.textMuted}>{v}</text>
       ))}
+
+      {showLOS && losVals.length > 0 && losGridVals.map((v, i) => (
+        <text key={`los-${i}`} x={W - padR + 6} y={yForLOS(v) + 3} textAnchor="start" fontSize={9} fill={LOS_COLOR}>
+          {Math.round(v)}%
+        </text>
+      ))}
+
       {lines.map(line => {
         const pts = data.map((d, i) => `${xFor(i)},${yFor(d[line.key])}`).join(" ");
         return (
@@ -227,6 +259,36 @@ function MultiLineChart({ data, t }) {
           </g>
         );
       })}
+
+      {showLOS && losVals.length > 0 && (() => {
+        // Break the polyline at any week with a missing LOS value instead
+        // of interpolating across the gap.
+        const segments = [];
+        let cur = [];
+        data.forEach((d, i) => {
+          if (d.los === null || d.los === undefined) {
+            if (cur.length) segments.push(cur);
+            cur = [];
+          } else {
+            cur.push([i, d.los]);
+          }
+        });
+        if (cur.length) segments.push(cur);
+        return (
+          <g>
+            {segments.map((seg, si) => (
+              <polyline key={si} points={seg.map(([i, v]) => `${xFor(i)},${yForLOS(v)}`).join(" ")}
+                fill="none" stroke={LOS_COLOR} strokeWidth={2} strokeDasharray="5 3"
+                strokeLinejoin="round" strokeLinecap="round" />
+            ))}
+            {data.map((d, i) => (d.los === null || d.los === undefined) ? null : (
+              <circle key={i} cx={xFor(i)} cy={yForLOS(d.los)} r={2.75} fill={t.card}
+                stroke={LOS_COLOR} strokeWidth={1.75} />
+            ))}
+          </g>
+        );
+      })()}
+
       {data.map((d, i) => (
         <text key={d.short} x={xFor(i)} y={H + 16} textAnchor="middle" fontSize={10} fill={t.textSecond}>{d.short}</text>
       ))}
@@ -389,7 +451,12 @@ function buildReceivingShiftRolling(wb, weekList, idx, span) {
   for (let i = start; i <= idx; i++) {
     const wk = weekList[i];
     const d = parseWeekReceivingByShift(wb, wk.name);
-    if (d) out.push({ short:getWeekShort(wk), label:getWeekLabel(wk), A:d.A, B:d.B, C:d.C });
+    if (!d) continue;
+    // LOS is optional per week — parsed defensively so a bad/missing cell
+    // just omits that week's LOS point rather than breaking the chart.
+    let los = null;
+    try { los = parseLOS(wb, wk.name); } catch (e) { /* skip silently, already logged elsewhere */ }
+    out.push({ short:getWeekShort(wk), label:getWeekLabel(wk), A:d.A, B:d.B, C:d.C, los });
   }
   return out;
 }
@@ -836,15 +903,19 @@ function App() {
           <Card t={t}>
             <SectionHeader t={t} eyebrow="By Shift · Receiving Only" eyebrowColor="#0284C7" eyebrowBg={dark?"#0284C722":"#e0f2fe"}
               title="Receiving Unique Processors Impacted by Shift"
-              subtitle={`${receivingRolling[0].label} – ${receivingRolling[receivingRolling.length-1].label} · Receiving home department only · unique LanIDs with 1+ assessed error, FYI/not-an-error excluded`} />
-            <MultiLineChart data={receivingRolling} t={t} />
-            <div style={{ display:"flex", gap:16, marginTop:12, justifyContent:"center" }}>
+              subtitle={`${receivingRolling[0].label} – ${receivingRolling[receivingRolling.length-1].label} · Receiving home department only · unique LanIDs with 1+ assessed error, FYI/not-an-error excluded · LOS overlaid on its own right-hand scale`} />
+            <MultiLineChart data={receivingRolling} t={t} showLOS={true} />
+            <div style={{ display:"flex", gap:16, marginTop:12, justifyContent:"center", flexWrap:"wrap" }}>
               {["A","B","C"].map(k => (
                 <div key={k} style={{ display:"flex", alignItems:"center", gap:6, fontSize:11.5, color:t.textSecond, fontWeight:600 }}>
                   <span style={{ width:10, height:10, borderRadius:5, background:SHIFT_COLORS[k], display:"inline-block" }} />
                   {k}-Shift
                 </div>
               ))}
+              <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:11.5, color:t.textSecond, fontWeight:600 }}>
+                <svg width="14" height="10"><line x1="0" y1="5" x2="14" y2="5" stroke={LOS_COLOR} strokeWidth="2" strokeDasharray="4 2" /></svg>
+                LOS (right axis)
+              </div>
             </div>
             <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13, marginTop:16 }}>
               <thead>
@@ -853,6 +924,7 @@ function App() {
                   <th style={{ textAlign:"right", padding:"6px 10px", fontSize:11, color:SHIFT_COLORS.A, textTransform:"uppercase" }}>A</th>
                   <th style={{ textAlign:"right", padding:"6px 10px", fontSize:11, color:SHIFT_COLORS.B, textTransform:"uppercase" }}>B</th>
                   <th style={{ textAlign:"right", padding:"6px 10px", fontSize:11, color:SHIFT_COLORS.C, textTransform:"uppercase" }}>C</th>
+                  <th style={{ textAlign:"right", padding:"6px 10px", fontSize:11, color:LOS_COLOR, textTransform:"uppercase" }}>LOS</th>
                 </tr>
               </thead>
               <tbody>
@@ -862,6 +934,7 @@ function App() {
                     <td style={{ padding:"7px 10px", textAlign:"right", fontWeight:700, color:SHIFT_COLORS.A }}>{d.A}</td>
                     <td style={{ padding:"7px 10px", textAlign:"right", fontWeight:700, color:SHIFT_COLORS.B }}>{d.B}</td>
                     <td style={{ padding:"7px 10px", textAlign:"right", fontWeight:700, color:SHIFT_COLORS.C }}>{d.C}</td>
+                    <td style={{ padding:"7px 10px", textAlign:"right", fontWeight:700, color:LOS_COLOR }}>{d.los===null||d.los===undefined?"—":`${d.los}%`}</td>
                   </tr>
                 ))}
               </tbody>
