@@ -300,6 +300,7 @@ footer { text-align:center; padding:1.5rem; font-size:.75rem;
   <div class="no-print" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
     <button class="btn" onclick="goHub()">← Hub</button>
     <button class="btn" id="btn-ov" onclick="showView('ov')" style="display:none">← Overview</button>
+    <select class="proc-sel" id="fy-sel" style="min-width:120px" onchange="onFYChange(this.value)"></select>
     <select class="proc-sel" id="hdr-proc-sel" style="display:none" onchange="onSelChange(this.value)"></select>
     <label style="cursor:pointer">
       <span class="btn">📂 Load File</span>
@@ -452,6 +453,11 @@ const HUB_URL   = "index.html";
 // offset math needed anymore (previously: XLSX "Week N" -> Tool FW N-5).
 const FW_SHEET_RE = /^FW\s*(\d+)\s+(\d+)$/i;
 
+// Minimum number of weekly data points required to render a meaningful
+// trend chart. If the selected fiscal year has fewer weeks than this,
+// we backfill with the most recent preceding weeks (from the prior FY).
+const MIN_GRAPH_WEEKS = 8;
+
 // FW1 calendar anchor — used only as a last-resort fallback when a fiscal
 // week has no usable row dates to derive its own range from. Real ranges
 // are computed live from the dates found in each sheet (see
@@ -473,6 +479,10 @@ let _data={}, _cur=null, _logFlt="All", _dark=true, _ch={};
 let NUM_WEEKS = 0;          // total fiscal weeks detected in the workbook (dynamic)
 let FW_DATE_RANGES = {};    // computed live from the workbook — see deriveDateRanges()
 let FW_LABELS = {};         // seq (1..NUM_WEEKS) -> display label, e.g. "FW6 '26"
+let SEQ_FY = {};            // seq (1..NUM_WEEKS) -> 2-digit fiscal year, e.g. 26
+let FY_LIST = [];           // unique fiscal years detected, descending (newest first)
+let _curFY = null;          // fiscal year currently selected in the FY dropdown
+let _winSeqs = [];          // seq numbers making up the current graphing window
 
 // =============================================================================
 // HELPERS
@@ -486,6 +496,30 @@ function trunc(s,n=25){return s.length>n?s.slice(0,n-1)+"…":s;}
 function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
 function fwLbl(seq){ return FW_LABELS[seq] || `FW${seq}`; }
 function fwRangeLabel(){ return NUM_WEEKS ? `${fwLbl(1)} – ${fwLbl(NUM_WEEKS)}` : ""; }
+
+// Range label for the currently selected graphing window (FY + any
+// backfilled weeks needed to satisfy MIN_GRAPH_WEEKS).
+function winRangeLabel(){
+  if(!_winSeqs.length) return "";
+  return _winSeqs.length===1 ? fwLbl(_winSeqs[0]) : `${fwLbl(_winSeqs[0])} – ${fwLbl(_winSeqs[_winSeqs.length-1])}`;
+}
+
+// Given a fiscal year, return the ascending list of seq numbers to graph:
+// all weeks belonging to that FY, plus enough immediately-preceding weeks
+// (chronologically, so from the prior FY) to reach MIN_GRAPH_WEEKS total.
+function computeWindowSeqs(fy){
+  const fySeqs=[];
+  for(let s=1;s<=NUM_WEEKS;s++){ if(SEQ_FY[s]===fy) fySeqs.push(s); }
+  if(!fySeqs.length) return [];
+  fySeqs.sort((a,b)=>a-b);
+  let start=fySeqs[0];
+  const end=fySeqs[fySeqs.length-1];
+  let count=fySeqs.length;
+  while(count<MIN_GRAPH_WEEKS && start>1){ start--; count++; }
+  const win=[];
+  for(let s=start;s<=end;s++) win.push(s);
+  return win;
+}
 
 // Alphabetical comparator for LanIDs — used for all processor dropdowns.
 // Applies automatically to any new LanID added to the workbook in the future.
@@ -551,11 +585,14 @@ function parseWB(wb){
   sheetMeta.sort((a,b)=>(a.yy-b.yy)||(a.fw-b.fw));
 
   const seqOf={}, labelOf={};
+  SEQ_FY={};
   sheetMeta.forEach((m,i)=>{
     seqOf[m.sheet]=i+1;
     labelOf[m.sheet]=`FW${m.fw} '${m.yy}`;
+    SEQ_FY[i+1]=m.yy;
   });
   FW_LABELS = Object.fromEntries(sheetMeta.map((m,i)=>[i+1, labelOf[m.sheet]]));
+  FY_LIST = [...new Set(sheetMeta.map(m=>m.yy))].sort((a,b)=>b-a);
 
   for(const {sheet:sn} of sheetMeta){
     const seq=seqOf[sn];
@@ -745,11 +782,34 @@ function init(){
   const hSel=document.getElementById("hdr-proc-sel");
   const sorted=Object.values(_data).sort(byLanidAlpha);
   hSel.innerHTML=sorted.map(p=>`<option value="${p.lanid}">${p.lanid}</option>`).join("");
-  // Footer reflects actual detected week range
+
+  // FY selector — defaults to the newest fiscal year detected in the workbook.
+  // If that FY has fewer than MIN_GRAPH_WEEKS weeks of data, the graphing
+  // window automatically backfills with the preceding weeks (see computeWindowSeqs).
+  _curFY = FY_LIST[0];
+  _winSeqs = computeWindowSeqs(_curFY);
+  const fySel=document.getElementById("fy-sel");
+  fySel.innerHTML = FY_LIST.map(fy=>`<option value="${fy}">FY${fy}</option>`).join("");
+  fySel.value = _curFY;
+
+  // Footer reflects actual detected week range (all-time, across the full workbook)
   document.getElementById("det-footer").innerHTML=
     `Processor Error Card &nbsp;·&nbsp; MWFC Receiving Operations &nbsp;·&nbsp; ${fwRangeLabel()} &nbsp;·&nbsp; Nordstrom`;
   renderOverview();
   showView("ov");
+}
+
+// Called when the FY dropdown changes — recomputes the graphing window and
+// re-renders whichever view (Overview or Detail) is currently active.
+function onFYChange(val){
+  _curFY = +val;
+  _winSeqs = computeWindowSeqs(_curFY);
+  if(document.getElementById("v-ov").classList.contains("active")){
+    renderOverview();
+  }
+  if(document.getElementById("v-det").classList.contains("active") && _cur){
+    renderDetail(_cur);
+  }
 }
 
 // =============================================================================
@@ -777,7 +837,7 @@ function gotoDetail(){
 function renderOverview(){
   const procs=Object.values(_data);
 
-  // Dept-wide aggregates
+  // Dept-wide aggregates (all-time — not scoped to the FY graphing window)
   let totalIncidents=0,totalCP1=0,totalCP2=0,totalCP3=0;
   const activeWeekSet=new Set();
   for(const p of procs){
@@ -790,7 +850,7 @@ function renderOverview(){
   document.getElementById("ov-sub").textContent=
     `All processors · ${fwRangeLabel()}`;
   document.getElementById("ov-weekly-sub").textContent=
-    `${fwRangeLabel()} · Stacked by CP1 · CP2 · CP3`;
+    `FY${_curFY} window: ${winRangeLabel()} · Stacked by CP1 · CP2 · CP3`;
 
   document.getElementById("ov-stats").innerHTML=[
     {l:"Processors",      v:procs.length,         s:"LanIDs on record",    c:navy},
@@ -807,10 +867,14 @@ function renderOverview(){
   sel.innerHTML=`<option value="">&#8212; Select a LanID &#8212;</option>`+
     sorted.map(p=>`<option value="${p.lanid}">${p.lanid}</option>`).join("");
 
-  // Weekly stacked chart — all processors, FW1-NUM_WEEKS
-  const weeklyAgg=Array.from({length:NUM_WEEKS},(_,i)=>({fw:i+1,cp1:0,cp2:0,cp3:0}));
+  // Weekly stacked chart — all processors, scoped to the current FY window
+  // (backfilled with prior-FY weeks automatically if under MIN_GRAPH_WEEKS)
+  const weeklyAgg=_winSeqs.map(seq=>({fw:seq,cp1:0,cp2:0,cp3:0}));
   for(const p of procs){
-    p.weekly.forEach((w,i)=>{weeklyAgg[i].cp1+=w.shipment;weeklyAgg[i].cp2+=w.piece;weeklyAgg[i].cp3+=w.carton;});
+    _winSeqs.forEach((seq,i)=>{
+      const w=p.weekly[seq-1];
+      weeklyAgg[i].cp1+=w.shipment; weeklyAgg[i].cp2+=w.piece; weeklyAgg[i].cp3+=w.carton;
+    });
   }
   mkBar("ch-ov-weekly",weeklyAgg.map(w=>fwLbl(w.fw)),[
     {label:"CP1 — Shipment",data:weeklyAgg.map(w=>w.cp1),backgroundColor:CP_VIZ.CP1,stack:"s"},
@@ -818,7 +882,7 @@ function renderOverview(){
     {label:"CP3 — Carton",  data:weeklyAgg.map(w=>w.cp3),backgroundColor:CP_VIZ.CP3,stack:"s",borderRadius:4},
   ],{stacked:true,legend:true});
 
-  // Top error types per CP, dept-wide
+  // Top error types per CP, dept-wide (all-time)
   const cp1T={},cp2T={},cp3T={};
   for(const p of procs){
     for(const[k,v] of Object.entries(p.totals.shipTypes))   cp1T[k]=(cp1T[k]||0)+v;
@@ -831,31 +895,27 @@ function renderOverview(){
   });
 
   // ── Dept-wide CP summary cards (same layout as individual processor cards)
-  const deptWeekly=Array.from({length:NUM_WEEKS},(_,i)=>({fw:i+1,shipment:0,piece:0,carton:0,total:0}));
-  for(const p of procs){
-    p.weekly.forEach((w,i)=>{
-      deptWeekly[i].shipment+=w.shipment;
-      deptWeekly[i].piece+=w.piece;
-      deptWeekly[i].carton+=w.carton;
-      deptWeekly[i].total+=w.total;
-    });
-  }
+  // Week-over-week comparison uses the current FY window's last two weeks.
+  const deptWeekly=_winSeqs.map(seq=>{
+    const agg={fw:seq,shipment:0,piece:0,carton:0,total:0};
+    for(const p of procs){
+      const w=p.weekly[seq-1];
+      agg.shipment+=w.shipment; agg.piece+=w.piece; agg.carton+=w.carton; agg.total+=w.total;
+    }
+    return agg;
+  });
   const deptTotals={ shipment:totalCP1, piece:totalCP2, carton:totalCP3 };
 
-  // Week-over-week comparison (current FW vs previous FW) instead of an
-  // all-time slope — dept-wide totals only ever climb week over week since
-  // they're cumulative-by-nature in volume, so a slope always reads as
-  // "increasing." A WoW delta actually shows whether THIS week was better
-  // or worse than last week.
   function wowDelta(key){
-    const curFw=NUM_WEEKS, prevFw=NUM_WEEKS-1;
-    const cur=deptWeekly[curFw-1]?.[key]??0;
-    const prev=prevFw>=1?(deptWeekly[prevFw-1]?.[key]??0):null;
+    const n=deptWeekly.length;
+    const cur=deptWeekly[n-1]?.[key]??0;
+    const prev=n>=2?(deptWeekly[n-2]?.[key]??0):null;
+    const prevSeq=n>=2?deptWeekly[n-2].fw:null;
     if(prev===null) return{text:"No prior week to compare",color:gc(),diff:0};
     const diff=cur-prev;
-    if(diff>0)  return{text:`▲ +${diff} vs ${fwLbl(prevFw)}`, color:"#ef4444",diff};
-    if(diff<0)  return{text:`▼ ${diff} vs ${fwLbl(prevFw)}`,  color:"#10b981",diff};
-    return{text:`— Flat vs ${fwLbl(prevFw)}`,color:"#94a3b8",diff:0};
+    if(diff>0)  return{text:`▲ +${diff} vs ${fwLbl(prevSeq)}`, color:"#ef4444",diff};
+    if(diff<0)  return{text:`▼ ${diff} vs ${fwLbl(prevSeq)}`,  color:"#10b981",diff};
+    return{text:`— Flat vs ${fwLbl(prevSeq)}`,color:"#94a3b8",diff:0};
   }
 
   const ovCpRows=[
@@ -865,7 +925,8 @@ function renderOverview(){
   ];
   document.getElementById("ov-cp-cards").innerHTML=ovCpRows.map(r=>{
     const tot=deptTotals[r.key], wow=wowDelta(r.key);
-    const curWeekCount=deptWeekly[NUM_WEEKS-1]?.[r.key]??0;
+    const curSeq=_winSeqs[_winSeqs.length-1];
+    const curWeekCount=deptWeekly[deptWeekly.length-1]?.[r.key]??0;
     const entries=Object.entries(r.types).sort((a,b)=>b[1]-a[1]);
     const rows=entries.length
       ?entries.map(([t,c],i)=>`<tr${i===entries.length-1?' style="border-bottom:none"':""}>
@@ -880,7 +941,7 @@ function renderOverview(){
         <span class="cp-card-count" style="color:${r.color}">${tot}</span>
       </div>
       <div class="cp-trend-row">
-        <span>${fwLbl(NUM_WEEKS)}: ${curWeekCount}</span>
+        <span>${fwLbl(curSeq)}: ${curWeekCount}</span>
         <span style="color:${wow.color};font-weight:700">${wow.text}</span>
       </div>
       <div class="subtype-lbl">Error Sub-Types (All-Time)</div>
@@ -945,14 +1006,19 @@ function renderDetail(lanid){
 
   const sl=shiftLetter(proc.shift);
 
-  // Trends
+  // Windowed weekly data (current FY, backfilled to MIN_GRAPH_WEEKS if needed)
+  // — this drives the charts and the trend/active-week stats below.
+  const winWeekly=_winSeqs.map(seq=>proc.weekly[seq-1]);
+
+  // Trends — computed over the graphing window, not all-time
   const trends={
-    shipment:linSlope(proc.weekly,"shipment"),piece:linSlope(proc.weekly,"piece"),
-    carton:linSlope(proc.weekly,"carton"),overall:linSlope(proc.weekly,"total"),
+    shipment:linSlope(winWeekly,"shipment"),piece:linSlope(winWeekly,"piece"),
+    carton:linSlope(winWeekly,"carton"),overall:linSlope(winWeekly,"total"),
   };
   const ot=trendLabel(trends.overall);
   const topCP=["shipment","piece","carton"].reduce((b,k)=>proc.totals[k]>proc.totals[b]?k:b,"shipment");
   const topCPLabel={shipment:"Shipment",piece:"Piece",carton:"Carton"}[topCP];
+  const winActiveWeeks=winWeekly.filter(w=>w.total>0).length;
 
   // Identity header
   document.getElementById("det-hdr").innerHTML=`
@@ -964,22 +1030,23 @@ function renderDetail(lanid){
         <span style="font-family:monospace;font-size:11px;font-weight:800;color:var(--muted)">${proc.lanid}</span>
       </div>
       <div class="proc-meta-name" style="color:${sc}">${esc(proc.name)} &#8212; Error Frequency Trend</div>
-      <div class="proc-meta-sub">${fwRangeLabel()}</div>
+      <div class="proc-meta-sub">FY${_curFY} window: ${winRangeLabel()}</div>
     </div>`;
 
-  // Summary stats
+  // Summary stats — Flags/Errors are all-time; Active Weeks/Trend/Top Checkpoint
+  // reflect the current FY graphing window.
   document.getElementById("det-stats").innerHTML=[
-    {l:"Flags / Errors", v:`${proc.totals.overall} / ${proc.incidents}`, s:"CP flags vs. incidents",  c:sc},
-    {l:"Active Weeks",  v:`${proc.activeWeeks}/${NUM_WEEKS}`,s:"weeks with &#8805;1 flag",            c:gt()},
+    {l:"Flags / Errors", v:`${proc.totals.overall} / ${proc.incidents}`, s:"CP flags vs. incidents (all-time)",  c:sc},
+    {l:"Active Weeks",  v:`${winActiveWeeks}/${_winSeqs.length}`,s:`weeks with &#8805;1 flag &#183; FY${_curFY} window`, c:gt()},
     {l:"Overall Trend", v:ot.text,                           s:`slope ${trends.overall.toFixed(3)}/wk`,c:ot.color},
-    {l:"Top Checkpoint",v:topCPLabel,                        s:`${proc.totals[topCP]} flags`,          c:gt()},
+    {l:"Top Checkpoint",v:topCPLabel,                        s:`${proc.totals[topCP]} flags (all-time)`,          c:gt()},
   ].map(s=>`<div class="stat-card">
     <div class="stat-lbl">${s.l}</div>
     <div class="stat-val" style="color:${s.c}">${s.v}</div>
     <div class="stat-sub">${s.s}</div>
   </div>`).join("");
 
-  // Impact stats
+  // Impact stats (all-time)
   document.getElementById("det-impact").innerHTML=[
     {l:"Total Units Impacted",v:proc.totalUnits.toLocaleString()},
     {l:"Total Cases Impacted",v:proc.totalCases.toLocaleString()},
@@ -991,9 +1058,9 @@ function renderDetail(lanid){
 
   // Trend subtitle
   document.getElementById("trend-sub").innerHTML=
-    `Slope: ${trends.overall.toFixed(3)} flags/wk &nbsp;&#183;&nbsp; <span style="color:${ot.color};font-weight:700">${ot.text}</span>`;
+    `Slope: ${trends.overall.toFixed(3)} flags/wk &nbsp;&#183;&nbsp; <span style="color:${ot.color};font-weight:700">${ot.text}</span> &nbsp;&#183;&nbsp; FY${_curFY} window (${winRangeLabel()})`;
 
-  // Checkpoint summary cards
+  // Checkpoint summary cards (subtype tables remain all-time — labeled as such)
   const cpRows=[
     {label:"Shipment (CP1)",key:"shipment",typeKey:"shipTypes",  color:CP_VIZ.CP1},
     {label:"Piece (CP2)",   key:"piece",   typeKey:"pieceTypes", color:CP_VIZ.CP2},
@@ -1028,15 +1095,16 @@ function renderDetail(lanid){
     </div>`;
   }).join("");
 
-  renderCharts(proc,trends,sc);
+  renderCharts(proc,trends,sc,winWeekly);
   renderLog(proc);
 }
 
 // =============================================================================
 // CHART RENDERING (detail view)
 // =============================================================================
-function renderCharts(proc,trends,sc){
-  const fw_labels=proc.weekly.map(w=>fwLbl(w.fw));
+function renderCharts(proc,trends,sc,winWeekly){
+  winWeekly = winWeekly || _winSeqs.map(seq=>proc.weekly[seq-1]);
+  const fw_labels=winWeekly.map(w=>fwLbl(w.fw));
 
   // Value labels plugin for checkpoint flags bar
   const valueLabels={
@@ -1059,19 +1127,19 @@ function renderCharts(proc,trends,sc){
     bodyColor:gc(),borderColor:gb(),borderWidth:1,cornerRadius:8,
   };
 
-  // Weekly stacked bar
+  // Weekly stacked bar — scoped to the FY graphing window
   killChart("weekly");
   _ch.weekly=new Chart(document.getElementById("ch-weekly").getContext("2d"),{
     type:"bar",
     data:{labels:fw_labels,datasets:[
-      {label:"Shipment (CP1)",data:proc.weekly.map(w=>w.shipment),backgroundColor:CP_VIZ.CP1,stack:"s"},
-      {label:"Piece (CP2)",   data:proc.weekly.map(w=>w.piece),   backgroundColor:CP_VIZ.CP2,stack:"s"},
-      {label:"Carton (CP3)",  data:proc.weekly.map(w=>w.carton),  backgroundColor:CP_VIZ.CP3,stack:"s",borderRadius:{topLeft:4,topRight:4}},
+      {label:"Shipment (CP1)",data:winWeekly.map(w=>w.shipment),backgroundColor:CP_VIZ.CP1,stack:"s"},
+      {label:"Piece (CP2)",   data:winWeekly.map(w=>w.piece),   backgroundColor:CP_VIZ.CP2,stack:"s"},
+      {label:"Carton (CP3)",  data:winWeekly.map(w=>w.carton),  backgroundColor:CP_VIZ.CP3,stack:"s",borderRadius:{topLeft:4,topRight:4}},
     ]},
     options:{
       responsive:true,maintainAspectRatio:false,
       plugins:{legend:{labels:{color:gc(),font:{size:11},boxWidth:12,padding:12}},
-        tooltip:{...ttBase,callbacks:{title:([{dataIndex}])=>{const w=proc.weekly[dataIndex];return`${fwLbl(w.fw)} (${w.dateRange})`;}}}},
+        tooltip:{...ttBase,callbacks:{title:([{dataIndex}])=>{const w=winWeekly[dataIndex];return`${fwLbl(w.fw)} (${w.dateRange})`;}}}},
       scales:{
         x:{stacked:true,ticks:{color:gc(),font:{size:11}},grid:{color:gb()},border:{display:false}},
         y:{stacked:true,ticks:{color:gc(),font:{size:11},precision:0},grid:{color:gb()},border:{display:false}},
@@ -1079,12 +1147,12 @@ function renderCharts(proc,trends,sc){
     }
   });
 
-  // Trend line
+  // Trend line — scoped to the FY graphing window
   killChart("trend");
   _ch.trend=new Chart(document.getElementById("ch-trend").getContext("2d"),{
     type:"line",
     data:{labels:fw_labels,datasets:[{
-      label:"Total CP Flags",data:proc.weekly.map(w=>w.total),
+      label:"Total CP Flags",data:winWeekly.map(w=>w.total),
       borderColor:sc,backgroundColor:sc+"22",pointBackgroundColor:sc,
       pointRadius:4,borderWidth:2.5,tension:0.1,fill:false,
     }]},
@@ -1096,7 +1164,7 @@ function renderCharts(proc,trends,sc){
       }}
   });
 
-  // Checkpoint flags vertical bar
+  // Checkpoint flags vertical bar (all-time totals)
   killChart("cpflags");
   _ch.cpflags=new Chart(document.getElementById("ch-cpflags").getContext("2d"),{
     type:"bar",
@@ -1115,7 +1183,7 @@ function renderCharts(proc,trends,sc){
       }}
   });
 
-  // Top error types horizontal bar
+  // Top error types horizontal bar (all-time)
   const topTypes=[
     ...Object.entries(proc.totals.shipTypes).map(([type,count])=>({type,count,cp:"CP1"})),
     ...Object.entries(proc.totals.pieceTypes).map(([type,count])=>({type,count,cp:"CP2"})),
@@ -1145,14 +1213,16 @@ function renderCharts(proc,trends,sc){
 function renderLog(proc){
   proc=proc||(_cur&&_data[_cur]); if(!proc) return;
   const sc=shiftColor(proc.shift);
+  const winSet=new Set(_winSeqs);
   const filtered=proc.rawLog.filter(r=>{
+    if(!winSet.has(r.fw)) return false;
     if(_logFlt==="CP1") return r.cps.some(c=>c.cp==="CP1");
     if(_logFlt==="CP2") return r.cps.some(c=>c.cp==="CP2");
     if(_logFlt==="CP3") return r.cps.some(c=>c.cp==="CP3");
     return true;
   });
   document.getElementById("log-title").innerHTML=
-    `${filtered.length} Assessed${_logFlt!=="All"?` &nbsp;&#183;&nbsp; ${_logFlt} filter`:""}`;
+    `${filtered.length} Assessed &nbsp;&#183;&nbsp; FY${_curFY} window${_logFlt!=="All"?` &nbsp;&#183;&nbsp; ${_logFlt} filter`:""}`;
   document.getElementById("log-body").innerHTML=filtered.length
     ?filtered.map(r=>{
         const dateStr=r.date?r.date.slice(5).replace("-","/"): "&#8212;";
@@ -1199,11 +1269,12 @@ function toggleTheme(){
   if(document.getElementById("v-ov").classList.contains("active")) renderOverview();
   if(document.getElementById("v-det").classList.contains("active")&&_cur) {
     const proc=_data[_cur];
+    const winWeekly=_winSeqs.map(seq=>proc.weekly[seq-1]);
     const trends={
-      shipment:linSlope(proc.weekly,"shipment"),piece:linSlope(proc.weekly,"piece"),
-      carton:linSlope(proc.weekly,"carton"),overall:linSlope(proc.weekly,"total"),
+      shipment:linSlope(winWeekly,"shipment"),piece:linSlope(winWeekly,"piece"),
+      carton:linSlope(winWeekly,"carton"),overall:linSlope(winWeekly,"total"),
     };
-    renderCharts(proc,trends,shiftColor(proc.shift));
+    renderCharts(proc,trends,shiftColor(proc.shift),winWeekly);
   }
 }
 
