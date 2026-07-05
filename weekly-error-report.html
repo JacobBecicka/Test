@@ -42,6 +42,50 @@ const SHIFT_COLORS = { A:"#38BDF8", B:"#A78BFA", C:"#34D399" };
 const DEPT_COLORS  = { Receiving:"#38BDF8", Transfers:"#94A3B8" };
 
 // ---------------------------------------------------------------------------
+// LOS (Level of Service) heat-map coloring — continuous gradient
+// Grounded in the actual FW3–21 '26 history available at build time:
+// mean 94.3%, stdev ~2.6 pts (n=19). Color stops anchor the current 92%
+// goal as the start of "light green" and the 95% end-of-year goal as
+// "dark green," then step down through yellow/orange/red/dark red the
+// further a score falls below 92 — smoothly interpolated between stops
+// rather than hard bands.
+// ---------------------------------------------------------------------------
+const LOS_STOPS = [
+  { v: 70,  hex: "#7F1D1D" }, // darkest red  — floor
+  { v: 85,  hex: "#DC2626" }, // red
+  { v: 89,  hex: "#F97316" }, // orange
+  { v: 91,  hex: "#FACC15" }, // yellow
+  { v: 92,  hex: "#6EE7B7" }, // light green — meets current goal
+  { v: 95,  hex: "#059669" }, // dark green  — meets EOY goal
+  { v: 100, hex: "#065F46" }, // darkest green — ceiling
+];
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function rgbToHex([r, g, b]) {
+  const c = v => Math.round(v).toString(16).padStart(2, "0");
+  return `#${c(r)}${c(g)}${c(b)}`;
+}
+
+function losHeat(pct) {
+  const stops = LOS_STOPS;
+  if (pct <= stops[0].v) return stops[0].hex;
+  if (pct >= stops[stops.length - 1].v) return stops[stops.length - 1].hex;
+  for (let i = 0; i < stops.length - 1; i++) {
+    const a = stops[i], b = stops[i + 1];
+    if (pct >= a.v && pct <= b.v) {
+      const f = (pct - a.v) / (b.v - a.v);
+      const ca = hexToRgb(a.hex), cb = hexToRgb(b.hex);
+      const mixed = ca.map((c, i2) => c + (cb[i2] - c) * f);
+      return rgbToHex(mixed);
+    }
+  }
+  return stops[stops.length - 1].hex;
+}
+
+// ---------------------------------------------------------------------------
 // Fiscal week handling
 // Sheets are named directly with their fiscal week, e.g. "FW1 26", "FW48 25".
 // No calendar-week math or anchor detection is needed anymore — the sheet
@@ -74,6 +118,26 @@ function sheetHasData(wb, sheetName) {
   const rows = XLSX.utils.sheet_to_json(sheet, { header:1, defval:"" });
   if (!rows || rows.length < 6) return false;
   return rows.slice(5).some(r => r && String(r[6] || "").trim());
+}
+
+// Reads the LOS % from cell B3 (row index 2, col index 1) of a fiscal week
+// sheet, keyed off the "LOS" label in A3. Returns null if absent/unparseable
+// rather than throwing, so weeks without LOS data degrade gracefully.
+function parseLOS(wb, sheetName) {
+  try {
+    const sheet = wb.Sheets[sheetName];
+    if (!sheet) return null;
+    const rows = XLSX.utils.sheet_to_json(sheet, { header:1, defval:"" });
+    if (!rows || rows.length < 3) return null;
+    const label = String(rows[2]?.[0] || "").trim().toUpperCase();
+    const raw   = rows[2]?.[1];
+    if (label !== "LOS") return null;
+    const val = typeof raw === "number" ? raw : parseFloat(raw);
+    if (isNaN(val)) return null;
+    return val;
+  } catch (e) {
+    throw new Error(`parseLOS(${sheetName}): ${e.message}`);
+  }
 }
 
 function getTheme(mode) {
@@ -396,9 +460,9 @@ function CheckpointTable({ t, rows, total, accent, fmtPct }) {
     </div>
   );
 }
-function NavBar({ t, dark, setMode, onChangeWeek, showChange }) {
+function NavBar({ t, dark, setMode, onChangeWeek, showChange, debugOpen, setDebugOpen, debugCount }) {
   return (
-    <div className="no-print" style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:22 }}>
+    <div className="no-print" style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:22, flexWrap:"wrap", gap:8 }}>
       <div style={{ display:"flex", gap:8, alignItems:"center" }}>
         <a href="./index.html" style={{ display:"inline-flex", alignItems:"center", gap:5,
           padding:"6px 14px", borderRadius:20, border:`1px solid ${t.cardBorder}`,
@@ -413,6 +477,12 @@ function NavBar({ t, dark, setMode, onChangeWeek, showChange }) {
         )}
       </div>
       <div style={{ display:"flex", gap:8 }}>
+        <button className="btn-hover" onClick={() => setDebugOpen(!debugOpen)} style={{
+          display:"flex", alignItems:"center", gap:6, background:t.card,
+          border:`1px solid ${t.cardBorder}`, borderRadius:20, padding:"7px 12px",
+          cursor:"pointer", fontSize:12, fontWeight:700, color:t.textPrimary, boxShadow:t.shadow }}>
+          🐞 Debug{debugCount ? ` (${debugCount})` : ""}
+        </button>
         <button className="btn-hover" onClick={() => window.print()} style={{
           display:"flex", alignItems:"center", gap:6, background:t.card,
           border:`1px solid ${t.cardBorder}`, borderRadius:20, padding:"7px 12px",
@@ -429,17 +499,43 @@ function NavBar({ t, dark, setMode, onChangeWeek, showChange }) {
     </div>
   );
 }
+function DebugPanel({ t, logs, onClear }) {
+  return (
+    <div className="no-print" style={{ background:t.card, border:`1px solid ${t.cardBorder}`, borderRadius:16,
+      padding:"16px 18px", marginBottom:20, boxShadow:t.shadow }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+        <div style={{ fontSize:11, fontWeight:700, color:t.textMuted, letterSpacing:1, textTransform:"uppercase" }}>Debug Log</div>
+        <button onClick={onClear} style={{ background:"transparent", border:`1px solid ${t.cardBorder}`,
+          color:t.textMuted, borderRadius:14, padding:"3px 10px", cursor:"pointer", fontSize:11 }}>Clear</button>
+      </div>
+      <div style={{ maxHeight:160, overflowY:"auto", fontFamily:"monospace", fontSize:11.5 }}>
+        {logs.length === 0 && <div style={{ color:t.textMuted }}>No events logged.</div>}
+        {logs.map((l,i) => (
+          <div key={i} style={{ color: l.level==="error" ? "#f87171" : t.textSecond, marginBottom:3 }}>
+            [{l.time}] {l.msg}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function App() {
-  const [mode,     setMode]     = useState("light");
-  const [wb,       setWb]       = useState(null);
-  const [loading,  setLoading]  = useState(true);
-  const [error,    setError]    = useState(null);
-  const [weekList, setWeekList] = useState([]);   // chronological, data-having fiscal weeks
-  const [weekIdx,  setWeekIdx]  = useState(null); // index into weekList
-  const [report,   setReport]   = useState(null);
+  const [mode,      setMode]      = useState("light");
+  const [wb,        setWb]        = useState(null);
+  const [loading,   setLoading]   = useState(true);
+  const [error,     setError]     = useState(null);
+  const [weekList,  setWeekList]  = useState([]);   // chronological, data-having fiscal weeks
+  const [weekIdx,   setWeekIdx]   = useState(null); // index into weekList
+  const [report,    setReport]    = useState(null);
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [debugLog,  setDebugLog]  = useState([]);
   const t    = getTheme(mode);
   const dark = mode === "dark";
+
+  const logDebug = (msg, level = "info") => {
+    setDebugLog(prev => [...prev.slice(-49), { msg, level, time: new Date().toLocaleTimeString() }]);
+  };
 
   // Auto-fetch workbook on mount
   useEffect(() => {
@@ -457,10 +553,12 @@ function App() {
         setWeekList(withData);
         if (withData.length) setWeekIdx(withData.length - 1);
         setLoading(false);
+        logDebug(`Workbook loaded: ${withData.length} fiscal weeks with data.`);
       })
       .catch(err => {
         setError(err.message);
         setLoading(false);
+        logDebug(`Workbook load failed: ${err.message}`, "error");
       });
   }, []);
 
@@ -473,10 +571,28 @@ function App() {
     const rolling  = buildRolling(wb, weekList, weekIdx, 4);
     const receivingRolling = buildReceivingShiftRolling(wb, weekList, weekIdx, 6);
     if (!data) return;
+
+    // LOS is optional per week — parse defensively and log any issues rather
+    // than letting a bad cell break the whole report.
+    let los = null, prevLos = null;
+    try {
+      los = parseLOS(wb, wk.name);
+      logDebug(`LOS for ${wk.name}: ${los === null ? "not present" : los + "%"}`);
+    } catch (e) {
+      logDebug(e.message, "error");
+    }
+    if (prevWk) {
+      try {
+        prevLos = parseLOS(wb, prevWk.name);
+      } catch (e) {
+        logDebug(e.message, "error");
+      }
+    }
+
     const wLabel     = getWeekLabel(wk);
     const wLabelPrev = prevWk ? getWeekLabel(prevWk) : null;
     setReport({
-      data, prevData, rolling, receivingRolling, wLabel, wLabelPrev,
+      data, prevData, rolling, receivingRolling, los, prevLos, wLabel, wLabelPrev,
       takeaways: generateTakeaways(data, prevData, rolling, wLabel, wLabelPrev),
     });
   };
@@ -486,7 +602,9 @@ function App() {
       fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif",
       padding:"28px 16px 60px", transition:"background .25s" }}>
       <div style={{ maxWidth:580, margin:"0 auto" }}>
-        <NavBar t={t} dark={dark} setMode={setMode} showChange={false} />
+        <NavBar t={t} dark={dark} setMode={setMode} showChange={false}
+          debugOpen={debugOpen} setDebugOpen={setDebugOpen} debugCount={debugLog.length} />
+        {debugOpen && <DebugPanel t={t} logs={debugLog} onClear={() => setDebugLog([])} />}
         {children}
       </div>
     </div>
@@ -536,7 +654,7 @@ function App() {
   );
 
   // Report
-  const { data, prevData, rolling, receivingRolling, takeaways, wLabel, wLabelPrev } = report;
+  const { data, prevData, rolling, receivingRolling, takeaways, wLabel, wLabelPrev, los, prevLos } = report;
   const fmtPct     = n => `${((n/data.total)*100).toFixed(1)}%`;
   const shiftArr   = [["A",data.shift.A],["B",data.shift.B],["C",data.shift.C]].sort((a,b)=>b[1]-a[1]);
   const topShift   = shiftArr[0];
@@ -559,12 +677,22 @@ function App() {
   ];
   const deptPieData = data.deptSplit.map(d => ({ ...d, color:DEPT_COLORS[d.name] }));
 
+  // LOS summary tiles — only rendered when this week actually has LOS data.
+  const losColor    = los !== null ? losHeat(los) : null;
+  const losDelta     = (los !== null && prevLos !== null) ? +(los - prevLos).toFixed(1) : null;
+  const losFlat      = losDelta === 0;
+  const losUp        = losDelta !== null && losDelta > 0;
+  const losTrendColor = losDelta === null ? t.textMuted : losFlat ? t.textMuted : losUp ? "#34D399" : "#f87171";
+  const losTrendArrow = losDelta === null ? "—" : losFlat ? "→" : losUp ? "↑" : "↓";
+
   return (
     <div style={{ background:t.pageBg, minHeight:"100vh", padding:"28px 16px 50px",
       fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif", transition:"background .25s" }}>
       <div style={{ maxWidth:720, margin:"0 auto" }}>
 
-        <NavBar t={t} dark={dark} setMode={setMode} showChange={true} onChangeWeek={()=>setReport(null)} />
+        <NavBar t={t} dark={dark} setMode={setMode} showChange={true} onChangeWeek={()=>setReport(null)}
+          debugOpen={debugOpen} setDebugOpen={setDebugOpen} debugCount={debugLog.length} />
+        {debugOpen && <DebugPanel t={t} logs={debugLog} onClear={() => setDebugLog([])} />}
 
         <div style={{ marginBottom:22 }}>
           <div style={{ fontSize:11, fontWeight:700, color:t.textMuted, letterSpacing:1,
@@ -595,6 +723,24 @@ function App() {
                 <div style={{ fontSize:17, fontWeight:800, color:s.color }}>{s.value}</div>
               </div>
             ))}
+
+            {los !== null && (
+              <div style={{ background:`${losColor}22`, border:`1px solid ${losColor}66`,
+                borderRadius:10, padding:"9px 16px", flex:"1 1 130px" }}>
+                <div style={{ fontSize:10.5, color:t.textSecond, marginBottom:2 }}>LOS</div>
+                <div style={{ fontSize:17, fontWeight:800, color:losColor }}>{los}%</div>
+              </div>
+            )}
+
+            {los !== null && (
+              <div style={{ background:`${losTrendColor}1a`, border:`1px solid ${losTrendColor}55`,
+                borderRadius:10, padding:"9px 16px", flex:"1 1 130px" }}>
+                <div style={{ fontSize:10.5, color:t.textSecond, marginBottom:2 }}>LOS vs. Last Week</div>
+                <div style={{ fontSize:17, fontWeight:800, color:losTrendColor }}>
+                  {losTrendArrow} {losDelta === null ? "—" : `${losDelta>0?"+":""}${losDelta} pts`}
+                </div>
+              </div>
+            )}
           </div>
         </Card>
 
