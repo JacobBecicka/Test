@@ -540,7 +540,11 @@ function App() {
   // Auto-fetch workbook on mount
   useEffect(() => {
     setLoading(true);
-    fetch(WORKBOOK_URL)
+    // Cache-bust: raw.githubusercontent.com caches at the CDN edge for
+    // several minutes regardless of browser cache/incognito, so a fresh
+    // query string on every load is the reliable way to always get the
+    // latest committed version of the workbook.
+    fetch(`${WORKBOOK_URL}?t=${Date.now()}`)
       .then(res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.arrayBuffer();
