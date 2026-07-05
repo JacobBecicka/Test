@@ -19,7 +19,7 @@
   <script type="text/babel">
     const { useState, useRef, useCallback, useMemo, useEffect } = React;
 
-    const REPO_RAW = 'https://raw.githubusercontent.com/JacobBecicka/Test/main';
+    const REPO_RAW = 'https://raw.githubusercontent.com/JacobBecicka/Receiving_Error_Dashboard/main';
     const WORKBOOK  = 'AI_Safe_Weekly_Error_Data.xlsx';
 
     const SHIFTS = [
@@ -32,6 +32,17 @@
     // "FW48 25" — the sheet name IS the fiscal week/year, so there's no
     // anchor-detection or calendar-week-offset math needed anymore.
     const FW_SHEET_RE = /^FW\s*(\d+)\s+(\d+)$/i;
+
+    // Nordstrom fiscal year convention: FY<N> runs roughly Feb(cal N)→Jan(cal N+1).
+    // So a January access date belongs to the PRIOR fiscal year label.
+    // e.g. Jan 2026 → FY25, July 2026 → FY26.
+    function currentFiscalYY() {
+      const now = new Date();
+      const calYear = now.getFullYear();
+      const month = now.getMonth(); // 0 = January
+      const fyFullYear = month === 0 ? calYear - 1 : calYear;
+      return fyFullYear % 100;
+    }
 
     // ── DEBUG CATCHER ──────────────────────────────────────────────
     // Toggle with the "DEBUG" button in the control bar, or append
@@ -87,6 +98,7 @@
     }
 
     function fwLabel(fw) { return `FW${fw.fw} '${fw.yy}`; }
+    function fyLabel(yy) { return `FY'${String(yy).padStart(2,'0')}`; }
 
     function parseWorkbook(wb, log) {
       const result      = { a:{}, b:{}, c:{} };
@@ -135,7 +147,9 @@
         range: ranges[sheet] || "",
       }));
 
-      return { counts: result, ranges, trainingWMs, fiscalWeeks };
+      const fiscalYears = [...new Set(fiscalWeeks.map(f=>f.yy))].sort((a,b)=>a-b);
+
+      return { counts: result, ranges, trainingWMs, fiscalWeeks, fiscalYears };
     }
 
     function hexToRgb(h) {
@@ -174,6 +188,7 @@
     function App() {
       const [data,     setData]     = useState(null);
       const [shift,    setShift]    = useState("a");
+      const [selectedYY, setSelectedYY] = useState(null);
       const [tooltip,  setTooltip]  = useState(null);
       const [dragging, setDragging] = useState(false);
       const [viewMode, setViewMode] = useState("raw");
@@ -184,6 +199,21 @@
       const [logs, log] = useDebugLog();
       const inputRef = useRef();
       const tk = makeTk(dark);
+
+      // Pick a sensible default fiscal year once data loads: the FY that
+      // matches today's access date, falling back to the most recent FY
+      // present in the workbook if today's FY isn't in the data.
+      function pickDefaultYY(fiscalYears) {
+        if (!fiscalYears.length) return null;
+        const wantYY = currentFiscalYY();
+        if (fiscalYears.includes(wantYY)) {
+          log('info', `Defaulting to FY'${wantYY} (matches today's access date)`);
+          return wantYY;
+        }
+        const fallback = fiscalYears[fiscalYears.length-1];
+        log('warn', `Current FY'${wantYY} not found in workbook — defaulting to most recent FY'${fallback}`);
+        return fallback;
+      }
 
       // ── Auto-fetch workbook from GitHub on mount ──
       useEffect(() => {
@@ -200,6 +230,7 @@
               setShowDebug(true);
             }
             setData({ ...parsed, fileName: WORKBOOK });
+            setSelectedYY(pickDefaultYY(parsed.fiscalYears));
           } catch(e) {
             log('error', e.message);
             setLoadErr(e.message);
@@ -224,6 +255,7 @@
               setLoadErr(null);
             }
             setData({ ...parsed, fileName:file.name });
+            setSelectedYY(pickDefaultYY(parsed.fiscalYears));
           } catch (err) {
             log('error', `Failed to parse ${file.name}: ${err.message}`);
             setLoadErr(err.message);
@@ -234,13 +266,17 @@
 
       const onDrop = e => { e.preventDefault(); setDragging(false); load(e.dataTransfer.files[0]); };
 
-      const FW = data?.fiscalWeeks ?? [];
+      const allFW = data?.fiscalWeeks ?? [];
+      // Only show weeks belonging to the selected fiscal year.
+      const FW = useMemo(() =>
+        selectedYY===null ? allFW : allFW.filter(fw=>fw.yy===selectedYY),
+        [allFW, selectedYY]);
       const shiftCounts = data?.counts[shift] ?? {};
 
       const maxVal = useMemo(() =>
-        Math.max(...Object.values(shiftCounts).flatMap(m=>Object.values(m)),1), [shiftCounts]);
+        Math.max(...FW.flatMap(fw=>Object.values(shiftCounts).map(m=>m[fw.sheet]||0)),1), [shiftCounts, FW]);
 
-      // Totals/trends only count fiscal weeks (pre-FW1 weeks are excluded entirely)
+      // Totals/trends only count fiscal weeks within the selected FY
       const wmTotals = useMemo(() =>
         Object.fromEntries(Object.keys(shiftCounts).map(wm => [
           wm, FW.reduce((s,fw)=>s+(shiftCounts[wm]?.[fw.sheet]||0),0)
@@ -273,7 +309,8 @@
       }, [FW]);
 
       // Fiscal-year separators: draw a line whenever the fiscal year
-      // (from the sheet name itself, e.g. "FW1 26") changes.
+      // (from the sheet name itself, e.g. "FW1 26") changes. Kept for
+      // completeness though with FY filtering active this will rarely fire.
       const yearBreaks = useMemo(() => {
         const set = new Set();
         let prevYY = null;
@@ -338,6 +375,9 @@
               letter-spacing:.06em;border:1px solid transparent;background:transparent;
               color:${tk.textMuted};transition:all .2s}
             .view-btn.on{background:${tk.surface};border-color:${tk.borderMuted};color:${tk.text}}
+            .fy-select{background:${tk.surface};border:1px solid ${tk.borderMuted};border-radius:8px;
+              padding:.4rem .7rem;font-family:'DM Mono',monospace;font-size:.72rem;font-weight:600;
+              letter-spacing:.05em;color:${tk.text};cursor:pointer}
             /* Uniform header buttons — Hub / Print / Theme / Debug —
                matches Weekly, Monthly, and YTD report button styling */
             .hdr-btn{display:flex;align-items:center;gap:6px;background:${tk.surface};
@@ -380,6 +420,13 @@
                   </span>
                 </p>
               )}
+              {data && data.fiscalYears.length > 0 && (
+                <select className="fy-select" value={selectedYY ?? ""} onChange={e=>setSelectedYY(parseInt(e.target.value,10))}>
+                  {data.fiscalYears.map(yy=>(
+                    <option key={yy} value={yy}>{fyLabel(yy)}{yy===currentFiscalYY()?" (current)":""}</option>
+                  ))}
+                </select>
+              )}
               <button className="hdr-btn" onClick={()=>setShowDebug(d=>!d)}
                 style={showDebug?{color:"#f59e0b",borderColor:"#f59e0b"}:{}}>
                 DEBUG {logs.some(l=>l.level==='error') ? '⚠' : ''}
@@ -417,7 +464,7 @@
               </p>
             </div>
 
-          ) : !data || !FW.length ? (
+          ) : !data || !allFW.length ? (
             /* ── Error / manual fallback ── */
             <div style={{ maxWidth:480, margin:"4rem auto", textAlign:"center" }}>
               {loadErr && (
@@ -478,6 +525,10 @@
                     <button key={m} className={`view-btn${viewMode===m?" on":""}`} onClick={()=>setViewMode(m)}>{l}</button>
                   ))}
                 </div>
+
+                {FW.length===0 && (
+                  <span style={{ fontSize:".65rem", color:"#f59e0b" }}>No weeks found for {fyLabel(selectedYY)}.</span>
+                )}
 
                 <div style={{ marginLeft:"auto", display:"flex", gap:"1.5rem" }}>
                   {[
@@ -551,7 +602,7 @@
               <div style={{ display:"flex", alignItems:"center", gap:".75rem", marginBottom:"1rem" }}>
                 <div style={{ height:1, flex:1, background:`linear-gradient(to right, ${activeShift.accent}66, transparent)` }} />
                 <span style={{ fontSize:".58rem", letterSpacing:".15em", fontWeight:600, color:activeShift.accent }}>
-                  {activeShift.label.toUpperCase()} · RECEIVING & TRAINING
+                  {activeShift.label.toUpperCase()} · {selectedYY!==null?fyLabel(selectedYY):""} · RECEIVING & TRAINING
                 </span>
                 <div style={{ height:1, flex:1, background:tk.border }} />
               </div>
