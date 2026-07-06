@@ -104,6 +104,10 @@
     .tile-lbl { font-size: 10.5px; color: var(--text2); margin-bottom: 2px; }
     .tile-val { font-size: 17px; font-weight: 800; }
 
+    /* Grey bubble wrapper — matches the grey-track treatment used by
+       shift-tile / dept-tile strips elsewhere in this report */
+    .bubble { background: var(--track); border-radius: 12px; padding: 14px 16px; }
+
     .ie-pair { background: var(--track); border-radius: 10px; padding: 10px 14px; flex: 1 1 150px; }
     .ie-lbl { font-size: 10.5px; color: var(--text2); margin-bottom: 4px; }
     .ie-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--textm); margin-bottom: 2px; }
@@ -127,6 +131,35 @@
     .shift-tile-pct { font-size: 11px; color: var(--textm); }
 
     .coach-shift-lbl { font-size: 12px; font-weight: 800; margin-bottom: 6px; }
+
+    /* ===== Lipstick / bullet bar — combined shift chart ===== */
+    .bullet-row { margin-bottom: 18px; }
+    .bullet-row:last-child { margin-bottom: 0; }
+    .bullet-head {
+      display: flex; justify-content: space-between; align-items: baseline;
+      margin-bottom: 6px;
+    }
+    .bullet-lbl { font-size: 13px; font-weight: 800; }
+    .bullet-nums { font-size: 12px; color: var(--text2); }
+    .bullet-track {
+      position: relative; height: 26px; border-radius: 7px;
+      background: var(--track); overflow: hidden;
+    }
+    .bullet-outer {
+      position: absolute; top: 0; left: 0; height: 100%;
+      border-radius: 7px; transition: width 0.3s;
+    }
+    .bullet-inner {
+      position: absolute; top: 6px; left: 0; height: 14px;
+      border-radius: 5px; transition: width 0.3s;
+    }
+    .bullet-legend {
+      display: flex; gap: 18px; align-items: center; margin-top: 14px;
+      font-size: 11.5px; color: var(--text2); flex-wrap: wrap;
+    }
+    .bullet-legend-item { display: flex; align-items: center; gap: 6px; }
+    .legend-swatch { width: 14px; height: 14px; border-radius: 4px; flex-shrink: 0; }
+    .legend-swatch.inner { width: 14px; height: 8px; border-radius: 3px; }
 
     .spinner {
       width: 44px; height: 44px;
@@ -175,7 +208,7 @@
 // ════════════════════════════════════════════════════════
 //  CONFIG
 // ════════════════════════════════════════════════════════
-const REPO_RAW = 'https://raw.githubusercontent.com/JacobBecicka/Test/main';
+const REPO_RAW = 'https://raw.githubusercontent.com/JacobBecicka/Receiving_Error_Dashboard/main';
 const WORKBOOK  = 'AI_Safe_Weekly_Error_Data.xlsx';
 const OUTLIER_THRESHOLD = 500; // units above this → outlier row
 
@@ -184,6 +217,37 @@ const OUTLIER_THRESHOLD = 500; // units above this → outlier row
 //  A = sky blue | B = soft purple | C = mint green
 // ════════════════════════════════════════════════════════
 const SC = { A:'#38BDF8', B:'#A78BFA', C:'#34D399' };
+
+// Department colors — matched to Weekly Error Report's DEPT_COLORS
+const DC = { Receiving:'#38BDF8', Transfers:'#94A3B8' };
+
+// ════════════════════════════════════════════════════════
+//  COLOR HELPERS — same-hue shade variants for the lipstick chart
+//  outer bar = darker/saturated (All Shifts), inner bar = lighter
+//  pastel (Receiving-only subset)
+// ════════════════════════════════════════════════════════
+function hexToRgb(hex) {
+  const h = hex.replace('#','');
+  return {
+    r: parseInt(h.substring(0,2),16),
+    g: parseInt(h.substring(2,4),16),
+    b: parseInt(h.substring(4,6),16),
+  };
+}
+function rgbToHex(r,g,b) {
+  const c = n => Math.max(0,Math.min(255,Math.round(n))).toString(16).padStart(2,'0');
+  return `#${c(r)}${c(g)}${c(b)}`;
+}
+// Blend a hex color toward black (darken) or white (lighten) by ratio 0–1
+function shade(hex, ratio, toward) {
+  const { r,g,b } = hexToRgb(hex);
+  const t = toward === 'black' ? 0 : 255;
+  return rgbToHex(r+(t-r)*ratio, g+(t-g)*ratio, b+(t-b)*ratio);
+}
+// Darker, more saturated variant — used for the OUTER "All Shifts" bar
+const darkShade  = hex => shade(hex, 0.28, 'black');
+// Light pastel variant — used for the INNER "Receiving-only" bar
+const pastelShade = hex => shade(hex, 0.55, 'white');
 
 // ════════════════════════════════════════════════════════
 //  STATE
@@ -308,6 +372,22 @@ function aggregate(rows) {
   const shiftErrors = { A:0, B:0, C:0 };
   rows.forEach(r => { if (r.shift in shiftErrors) shiftErrors[r.shift]++; });
 
+  // Shift counts — Receiving home department only (new "By Shift · Receiving Only" section)
+  const shiftErrorsRecvOnly = { A:0, B:0, C:0 };
+  rows.forEach(r => {
+    if (r.shift in shiftErrorsRecvOnly && String(r.dept).toLowerCase().includes('receiv')) {
+      shiftErrorsRecvOnly[r.shift]++;
+    }
+  });
+
+  // Home department split — Receiving vs. all Transfer departments combined.
+  // Same "receiv" substring match used by the Weekly Error Report.
+  const deptSplit = { recv:0, xfer:0 };
+  rows.forEach(r => {
+    if (String(r.dept).toLowerCase().includes('receiv')) deptSplit.recv++;
+    else deptSplit.xfer++;
+  });
+
   // Checkpoint breakdown
   const cpC = { shipment:{}, piece:{}, carton:{} };
   rows.forEach(r => {
@@ -380,7 +460,7 @@ function aggregate(rows) {
   });
 
   return {
-    total, weeksLabel, shiftErrors,
+    total, weeksLabel, shiftErrors, shiftErrorsRecvOnly, deptSplit,
     shipment, piece, carton,
     outliers, unitsIncl, unitsExcl, casesIncl, casesExcl,
     shiftVolume, skuTotal, skuBreakdown, coaching,
@@ -570,7 +650,9 @@ function renderSummary(d) {
   </div>`).join('');
   return `<div class="card" style="padding:18px 20px">
     <div class="eyebrow" style="margin-bottom:2px">${esc(selectedFY)} — Summary</div>
-    <div class="tiles" style="margin-top:8px">${tiles}</div>
+    <div class="bubble" style="margin-top:8px">
+      <div class="tiles">${tiles}</div>
+    </div>
     <p style="font-size:12.5px;color:var(--text2);margin-top:12px;line-height:1.5">
       ${fmt(d.total)} logged errors across ${d.weeksLabel}. Shipment checkpoint errors lead at ${pct(shipTotal,d.total)},
       driven mainly by ${esc(d.shipment[0]?.name||'SKU Maintenance errors')}.
@@ -579,19 +661,75 @@ function renderSummary(d) {
   </div>`;
 }
 
-function renderShiftChart(d) {
-  const pieData = ['A','B','C'].map(s=>({name:`${s}-Shift`,value:d.shiftErrors[s],color:SC[s]}));
-  const donut   = buildDonut(pieData, d.total);
-  const tiles   = ['A','B','C'].map(s=>`
-    <div class="shift-tile">
-      <div class="shift-tile-lbl">${s}-Shift</div>
-      <div class="shift-tile-val" style="color:${SC[s]}">${d.shiftErrors[s]}</div>
-      <div class="shift-tile-pct">${pct(d.shiftErrors[s],d.total)}</div>
-    </div>`).join('');
+// ════════════════════════════════════════════════════════
+//  COMBINED SHIFT "LIPSTICK" BULLET CHART
+//  Replaces the two separate donuts (All Shifts / Receiving Only)
+//  with one bar per shift. Outer/darker bar = all errors logged
+//  on that shift. Inner/lighter pastel bar = subset of those
+//  errors from Receiving-home-department processors.
+// ════════════════════════════════════════════════════════
+function renderShiftCombined(d) {
+  const maxVal = Math.max(1, ...['A','B','C'].map(s => d.shiftErrors[s]));
+  const rows = ['A','B','C'].map(s => {
+    const total = d.shiftErrors[s];
+    const recv  = d.shiftErrorsRecvOnly[s];
+    const outerW = (total/maxVal*100).toFixed(1);
+    const innerW = (recv/maxVal*100).toFixed(1);
+    const recvPctOfShift = pct(recv, total);
+    return `<div class="bullet-row">
+      <div class="bullet-head">
+        <span class="bullet-lbl" style="color:${darkShade(SC[s])}">${s}-Shift</span>
+        <span class="bullet-nums">
+          <strong style="color:var(--text1)">${fmt(total)}</strong> total
+          &nbsp;·&nbsp;
+          <strong style="color:var(--text1)">${fmt(recv)}</strong> Receiving (${recvPctOfShift})
+        </span>
+      </div>
+      <div class="bullet-track">
+        <div class="bullet-outer" style="width:${outerW}%;background:${darkShade(SC[s])}"></div>
+        <div class="bullet-inner" style="width:${innerW}%;background:${pastelShade(SC[s])}"></div>
+      </div>
+    </div>`;
+  }).join('');
+
   return `<div class="card">
     <span class="badge" style="color:#7C3AED;background:${darkMode?'#7C3AED22':'#ede9fe'}">By Shift</span>
     <div class="sec-title">Error Volume by Shift</div>
-    <div class="sec-sub">Count and share of total errors — ${d.weeksLabel}</div>
+    <div class="sec-sub">All errors per shift, with the Receiving-only portion shown inside — ${d.weeksLabel}</div>
+    <div style="margin-top:20px">${rows}</div>
+    <div class="bullet-legend">
+      <div class="bullet-legend-item">
+        <span class="legend-swatch" style="background:${darkShade('#94A3B8')}"></span>
+        Darker bar — all errors, every home department
+      </div>
+      <div class="bullet-legend-item">
+        <span class="legend-swatch inner" style="background:${pastelShade('#94A3B8')}"></span>
+        Lighter bar — Receiving home department only
+      </div>
+    </div>
+  </div>`;
+}
+
+// Receiving vs. Transfers donut + tiles, matching the Weekly Error
+// Report's "By Department" section (same colors, same donut/tile layout).
+function renderDept(d) {
+  const total = d.deptSplit.recv + d.deptSplit.xfer;
+  if (!total) return '';
+  const pieData = [
+    { name:'Receiving', value:d.deptSplit.recv, color:DC.Receiving },
+    { name:'Transfers', value:d.deptSplit.xfer, color:DC.Transfers },
+  ];
+  const donut = buildDonut(pieData, total);
+  const tiles = pieData.map(p=>`
+    <div class="shift-tile">
+      <div class="shift-tile-lbl">${p.name}</div>
+      <div class="shift-tile-val" style="color:${p.color}">${p.value}</div>
+      <div class="shift-tile-pct">${pct(p.value,total)}</div>
+    </div>`).join('');
+  return `<div class="card">
+    <span class="badge" style="color:#38BDF8;background:${darkMode?'#38BDF822':'#e0f2fe'}">By Department</span>
+    <div class="sec-title">Receiving vs. Transfers</div>
+    <div class="sec-sub">Home Department — Receiving vs. all transfer departments combined, ${d.weeksLabel}</div>
     <div style="display:flex;justify-content:center;margin:18px 0 10px">${donut}</div>
     <div style="display:flex;gap:10px">${tiles}</div>
   </div>`;
@@ -775,7 +913,8 @@ function render() {
     renderFYSelector(fyKeys) +
     (d ? [
       renderSummary(d),
-      renderShiftChart(d),
+      renderShiftCombined(d),
+      renderDept(d),
       renderCheckpoints(d),
       renderVolume(d),
       renderCoaching(d),
