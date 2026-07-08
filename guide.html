@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Processor Performance · Field Guide · MWFC Receiving</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f0f4f8; --text:#1e293b; --muted:#64748b; --cardBg:#ffffff;
+    --cardBdr:#e2e8f0; --shadow:0 2px 12px rgba(0,0,0,.07);
+  }
+  [data-theme="dark"]{
+    --bg:#0f172a; --text:#e2e8f0; --muted:#94a3b8; --cardBg:#1e293b;
+    --cardBdr:#334155; --shadow:0 2px 14px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:'DM Mono','Courier New',monospace;
+    background:var(--bg); color:var(--text);
+    padding:1.75rem 2rem 3rem; transition:background .25s,color .25s;
+    min-height:100vh;
+  }
+  .top{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:.75rem;margin-bottom:1.25rem}
+  .eyebrow{font-size:.6rem;letter-spacing:.2em;color:var(--muted);font-family:'DM Sans',sans-serif;margin-bottom:.3rem}
+  h1{font-size:1.7rem;font-weight:800;font-family:'DM Sans',sans-serif;letter-spacing:-.03em}
+  .btns{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+  .hdr-btn{
+    display:flex;align-items:center;gap:6px;background:var(--cardBg);
+    border:1px solid var(--cardBdr);border-radius:20px;padding:7px 14px;
+    cursor:pointer;font-size:12px;font-weight:700;color:var(--text);
+    box-shadow:var(--shadow);text-decoration:none;white-space:nowrap;
+    font-family:'DM Sans',sans-serif;transition:opacity .15s;
+  }
+  .hdr-btn:hover{opacity:.82}
+  .frame-wrap{
+    background:var(--cardBg);border:1px solid var(--cardBdr);border-radius:12px;
+    overflow:hidden;box-shadow:var(--shadow);height:82vh;
+  }
+  embed{width:100%;height:100%;border:none}
+  .fallback{padding:2rem;text-align:center;color:var(--muted);font-size:.75rem}
+  @media print{ .no-print{display:none !important} body{background:#fff !important} }
+</style>
+</head>
+<body>
+  <div class="top">
+    <div>
+      <p class="eyebrow">MWFC RECEIVING · REFERENCE</p>
+      <h1>Processor Performance — Field Guide</h1>
+    </div>
+    <div class="btns no-print">
+      <a href="https://jacobbecicka.github.io/Test/index.html" class="hdr-btn">← Hub</a>
+      <a href="processor-performance.html" class="hdr-btn">← Processor Performance</a>
+      <button class="hdr-btn" onclick="window.print()">🖨️ Print / Save PDF</button>
+      <button class="hdr-btn" id="themeBtn" onclick="toggleTheme()">🌙 Dark</button>
+    </div>
+  </div>
+
+  <div class="frame-wrap">
+    <embed src="Dashboard_Guide.pdf" type="application/pdf" />
+  </div>
+  <p class="fallback no-print">
+    If the guide doesn't display above, <a href="Dashboard_Guide.pdf">open the PDF directly</a>.
+  </p>
+
+<script>
+  function toggleTheme(){
+    const html = document.documentElement;
+    const isDark = html.getAttribute('data-theme') === 'dark';
+    html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+    document.getElementById('themeBtn').textContent = isDark ? '🌙 Dark' : '☀️ Light';
+  }
+</script>
+</body>
+</html>
