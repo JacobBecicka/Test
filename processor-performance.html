@@ -17,52 +17,63 @@
 const { useState, useEffect, useMemo } = React;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-// NOTE: Month keys ("Jan 26", "Feb 26"...) come from the production workbook's
-// own sheet names / row dates, and are sorted using monthSortKey() below
-// (year-aware) rather than a hardcoded single-year lookup table — this keeps
-// sorting correct now that the error workbook spans multiple fiscal years
-// (FW48 '25 through FW7 '27 and beyond).
 function monthSortKey(m) {
   const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const [mon, yr] = String(m).split(' ');
   const idx = MONTHS.indexOf(mon);
   const yrNum = parseInt(yr, 10);
-  if (idx < 0 || isNaN(yrNum)) return Infinity; // unparseable keys sort last
+  if (idx < 0 || isNaN(yrNum)) return Infinity;
   return yrNum * 12 + idx;
 }
 
 const SHIFT_META = {
-  a: { label:'A-Shift', color:'#0284c7', bg:'rgba(2,132,199,.12)',  bdr:'rgba(2,132,199,.35)' },
-  b: { label:'B-Shift', color:'#7c3aed', bg:'rgba(124,58,237,.12)', bdr:'rgba(124,58,237,.35)' },
-  c: { label:'C-Shift', color:'#059669', bg:'rgba(5,150,105,.12)',  bdr:'rgba(5,150,105,.35)'  },
+  a: { label:'A-Shift', color:'#38bdf8', bg:'rgba(56,189,248,.18)',  bdr:'rgba(56,189,248,.4)' },
+  b: { label:'B-Shift', color:'#a78bfa', bg:'rgba(167,139,250,.18)', bdr:'rgba(167,139,250,.4)' },
+  c: { label:'C-Shift', color:'#34d399', bg:'rgba(52,211,153,.18)',  bdr:'rgba(52,211,153,.4)'  },
 };
 
 const ERR_FILE  = 'AI_Safe_Weekly_Error_Data.xlsx';
 const PROD_FILE = 'AI-safe-monthly-processing-data.xlsx';
 const HUB_URL   = 'https://jacobbecicka.github.io/Test/index.html';
 
-// Sheets in the error workbook are named directly with their fiscal week,
-// e.g. "FW1 26", "FW48 25" — no calendar-week-offset math is needed here at
-// all, since this tool only cares about which sheets to scan for rows; the
-// actual calendar month a row belongs to is derived from its own Start time
-// date (see xlDateToMonthKey), completely independent of sheet naming.
 const FW_SHEET_RE = /^FW\s*\d+\s+\d+$/i;
 
+const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
+function dbg(label, payload) {
+  if (!DEBUG) return;
+  console.log(`[debug] ${label}`, payload);
+  window.__dbgLog = window.__dbgLog || [];
+  let str;
+  try { str = JSON.stringify(payload, null, 2); } catch (e) { str = String(payload); }
+  if (str && str.length > 1200) str = str.slice(0, 1200) + '\n…(truncated)';
+  window.__dbgLog.push({ label, str });
+  window.dispatchEvent(new Event('dbglog'));
+}
+
+// NOTE: SKU Maintenance columns (SKU / SKE / K▲) tie the new "Capture Item
+// Attribute" production field to "SKU Maintenance Incorrect/Incomplete"
+// errors, which live in Checkpoint 1 (Shipment Error) — confirmed against
+// the live workbook. Rate scale is per 1,000 (not 10k/100k), chosen from
+// the Mar–Jun '26 distribution (median ~4.8/1,000).
 const COLS = [
-  { key:'tm',    label:'TM',       title:'LanID — Team Member identifier',                              w:72,  sortable:true  },
-  { key:'str',   label:'STR',      title:'Strength score: avg of VOL% and ACC% (0–100)',                w:98,  sortable:true  },
-  { key:'vol',   label:'VOL%',     title:'Volume percentile. C-shift normalized ×40/36.',               w:52,  sortable:true  },
-  { key:'acc',   label:'ACC%',     title:'Accuracy percentile: avg zone + split accuracy ranks.',       w:52,  sortable:true  },
-  { key:'zRate', label:'ZONE',     title:'Zone/pallet errors per 10,000 placement actions.',            w:52,  sortable:true  },
-  { key:'zErr',  label:'ZPE',      title:'Raw zone/pallet error count.',                                w:40,  sortable:true  },
-  { key:'sRate', label:'SPLIT',    title:'Split-move errors per 100,000 split-case units.',             w:52,  sortable:true  },
-  { key:'sErr',  label:'SPE',      title:'Raw split-move error count.',                                 w:40,  sortable:true  },
-  { key:'pal',   label:'PAL',      title:'Palletize units.',                                            w:56,  sortable:true  },
-  { key:'sc',    label:'SC UNITS', title:'Split-case units processed.',                                 w:68,  sortable:true  },
-  { key:'ps',    label:'SCANS',    title:'Process scan cases.',                                         w:56,  sortable:true  },
-  { key:'sh',    label:'SH',       title:'Shift assignment.',                                           w:32,  sortable:true  },
-  { key:'zTrend',label:'Z▲',       title:'Zone error trend vs prior month.',                            w:28,  sortable:false },
-  { key:'sTrend',label:'S▲',       title:'Split error trend vs prior month.',                           w:28,  sortable:false },
+  { key:'tm',      label:'TM',       title:'LanID — Team Member identifier',                              w:72,  sortable:true  },
+  { key:'str',     label:'STR',      title:'Strength score: avg of VOL% and ACC% (0–100)',                w:98,  sortable:true  },
+  { key:'vol',     label:'VOL%',     title:'Volume percentile. C-shift normalized ×40/36.',               w:52,  sortable:true  },
+  { key:'acc',     label:'ACC%',     title:'Accuracy percentile: avg of zone, split, and SKU accuracy ranks.', w:52,  sortable:true  },
+  { key:'zRate',   label:'ZONE',     title:'Zone/pallet errors per 10,000 placement actions.',            w:52,  sortable:true  },
+  { key:'zErr',    label:'ZPE',      title:'Raw zone/pallet error count.',                                w:40,  sortable:true  },
+  { key:'sRate',   label:'SPLIT',    title:'Split-move errors per 100,000 split-case units.',             w:52,  sortable:true  },
+  { key:'sErr',    label:'SPE',      title:'Raw split-move error count.',                                 w:40,  sortable:true  },
+  { key:'kRate',   label:'SKU',      title:'SKU Maintenance Incorrect/Incomplete errors per 1,000 Capture Item Attribute actions (Checkpoint 1).', w:52,  sortable:true  },
+  { key:'skuErr',  label:'SKE',      title:'Raw SKU Maintenance error count.',                            w:40,  sortable:true  },
+  { key:'pal',     label:'PAL',      title:'Palletize units.',                                            w:56,  sortable:true  },
+  { key:'sc',      label:'SC UNITS', title:'Split-case units processed.',                                 w:68,  sortable:true  },
+  { key:'cap',     label:'CAP',      title:'Capture Item Attribute actions.',                              w:56,  sortable:true  },
+  { key:'ps',      label:'SCANS',    title:'Process scan cases.',                                         w:56,  sortable:true  },
+  { key:'sh',      label:'SH',       title:'Shift assignment (most recent month on record).',            w:32,  sortable:true  },
+  { key:'zTrend',  label:'Z▲',       title:'Zone error trend vs prior month.',                            w:28,  sortable:false },
+  { key:'sTrend',  label:'S▲',       title:'Split error trend vs prior month.',                           w:28,  sortable:false },
+  { key:'kTrend',  label:'K▲',       title:'SKU error trend vs prior month.',                             w:28,  sortable:false },
 ];
 
 // ── Theme tokens ──────────────────────────────────────────────────────────────
@@ -103,6 +114,7 @@ function makeTk(dark) {
     numTxt:   dark ? '#cbd5e1' : '#475569',
     zErrTxt:  dark ? '#fca5a5' : '#b91c1c',
     sErrTxt:  dark ? '#93c5fd' : '#1d4ed8',
+    kErrTxt:  dark ? '#fdba74' : '#c2410c',
     tmStar:   dark ? '#fbbf24' : '#92400e',
     tmNorm:   dark ? '#94a3b8' : '#334155',
     swatchBdr:dark ? '#475569' : '#e2e8f0',
@@ -146,6 +158,22 @@ function splitFg(rate, dark) {
   if (rate===0) return dark?'#93c5fd':'#1d4ed8';
   return Math.min(rate/30,1)>0.55 ? '#fff' : (dark?'#93c5fd':'#1e40af');
 }
+// NEW — SKU Maintenance rate color: amber → burnt orange/red. Deliberately a
+// distinct hue family from ZONE (green→red) and SPLIT (light→dark blue).
+// Scale anchored at /1,000 breakpoints [0, 2, 5, 10, 15+].
+function skuColor(rate, dark) {
+  if (rate===null||rate===undefined) return dark?'#1e293b':'#f1f5f9';
+  if (rate===0) return dark?'#3a2a0f':'#fef3c7';
+  const t = Math.min(rate/15,1);
+  if (t<0.33) return lerp(dark?'#3a2a0f':'#fef3c7', dark?'#7c4a03':'#fdba74', t/0.33);
+  if (t<0.66) return lerp(dark?'#7c4a03':'#fdba74', dark?'#9a3412':'#fb923c', (t-0.33)/0.33);
+  return lerp(dark?'#9a3412':'#fb923c', dark?'#7c1d0a':'#c2410c', (t-0.66)/0.34);
+}
+function skuFg(rate, dark) {
+  if (rate===null||rate===undefined) return dark?'#475569':'#94a3b8';
+  if (rate===0) return dark?'#fbbf24':'#92400e';
+  return Math.min(rate/15,1)>0.55 ? '#fff' : (dark?'#fed7aa':'#7c2d12');
+}
 
 // ── Parsing helpers ───────────────────────────────────────────────────────────
 function findIdx(hdr, terms) {
@@ -177,14 +205,15 @@ function normalizeSheetMon(name) {
 
 // ── File parsers ──────────────────────────────────────────────────────────────
 function parseErrors(wb) {
-  // errors[lanid][monthKey] = { zErr, sErr, sh, dept }
+  // errors[lanid][monthKey] = { zErr, sErr, skuErr, sh, dept }
   const errors = {};
+  const sheetsScanned = [];
 
   for (const sn of wb.SheetNames) {
     if (!FW_SHEET_RE.test(sn)) continue;
+    sheetsScanned.push(sn);
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1,defval:''});
 
-    // Find header row (contains "Start time")
     const hdrIdx = rows.findIndex(r => findIdx(r,['start time']) >= 0);
     if (hdrIdx < 0) continue;
 
@@ -193,6 +222,7 @@ function parseErrors(wb) {
     const wmIdx    = findIdx(hdr, ['wm sign on']);
     const shiftIdx = findIdx(hdr, ['shift:','shift']);
     const deptIdx  = findIdx(hdr, ['home department']);
+    const cp1Idx   = findIdx(hdr, ['shipment error','checkpoint 1']);
     const cp3Idx   = findIdx(hdr, ['carton error','checkpoint 3']);
 
     if (wmIdx<0 || startIdx<0 || cp3Idx<0) continue;
@@ -215,33 +245,46 @@ function parseErrors(wb) {
       if (!monthKey) continue;
 
       if (!errors[wm])            errors[wm]={};
-      if (!errors[wm][monthKey])  errors[wm][monthKey]={zErr:0,sErr:0,sh:sk,dept:dept.includes('train')?'training':'receiving'};
+      if (!errors[wm][monthKey])  errors[wm][monthKey]={zErr:0,sErr:0,skuErr:0,sh:sk,dept:dept.includes('train')?'training':'receiving'};
 
       const cp3  = String(row[cp3Idx]||'').replace(/\xa0/g,'').trim();
-      const parts = cp3.split(';').map(p=>p.trim().toLowerCase());
-      if (parts.some(p=>p.includes('zone destination'))) errors[wm][monthKey].zErr++;
-      if (parts.some(p=>p.includes('split move')))       errors[wm][monthKey].sErr++;
+      const parts3 = cp3.split(';').map(p=>p.trim().toLowerCase());
+      if (parts3.some(p=>p.includes('zone destination'))) errors[wm][monthKey].zErr++;
+      if (parts3.some(p=>p.includes('split move')))        errors[wm][monthKey].sErr++;
+
+      // SKU Maintenance Incorrect/Incomplete lives in Checkpoint 1 (Shipment
+      // Error), confirmed against the live workbook — not Checkpoint 2.
+      if (cp1Idx>=0) {
+        const cp1 = String(row[cp1Idx]||'').replace(/\xa0/g,'').trim();
+        const parts1 = cp1.split(';').map(p=>p.trim().toLowerCase());
+        if (parts1.some(p=>p.includes('sku maintenance'))) errors[wm][monthKey].skuErr++;
+      }
+
+      errors[wm][monthKey].sh = sk;
     }
   }
+  dbg('Error workbook — sheets scanned', sheetsScanned);
+  dbg('Error workbook — LanIDs found', Object.keys(errors).length);
   return errors;
 }
 
 function parseProd(wb) {
-  // prod[tm][monthKey] = { sh, pal, zon, ps, sc }
+  // prod[tm][monthKey] = { sh, pal, zon, ps, sc, cap }
   const prod = {};
+  const sheetsScanned = [];
 
   for (const sn of wb.SheetNames) {
     const monthKey = normalizeSheetMon(sn);
     if (!/^[A-Z][a-z]{2}\s\d{2}$/.test(monthKey)) continue;
+    sheetsScanned.push(sn);
 
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1,defval:''});
     if (rows.length<2) continue;
 
-    // Find header row: must have palletize or split case
     let hdrIdx = rows.findIndex(r =>
       findIdx(r,['palletiz'])>=0 || findIdx(r,['split case'])>=0
     );
-    if (hdrIdx<0) hdrIdx=0; // fallback
+    if (hdrIdx<0) hdrIdx=0;
 
     const hdr    = rows[hdrIdx];
     const tmIdx  = findIdx(hdr, ['wm sign','tm','lanid','user id']);
@@ -250,6 +293,10 @@ function parseProd(wb) {
     const zonIdx = findIdx(hdr, ['zone assign','zone']);
     const psIdx  = findIdx(hdr, ['process scan','process']);
     const scIdx  = findIdx(hdr, ['split case','split']);
+    // "Capture Item Attribute" — corrected spelling in the current workbook,
+    // but the earlier "Capture Item Atribute" (single-t) typo is matched too
+    // so older monthly sheets that predate the fix still parse correctly.
+    const capIdx = findIdx(hdr, ['capture item attribute','capture item atribute']);
 
     if (tmIdx<0) continue;
 
@@ -264,17 +311,26 @@ function parseProd(wb) {
       const zon = Number(row[zonIdx])||0;
       const ps  = Number(row[psIdx]) ||0;
       const sc  = Number(row[scIdx]) ||0;
+      const cap = capIdx>=0 ? (Number(row[capIdx])||0) : 0;
 
       if (!prod[tm])           prod[tm]={};
-      if (!prod[tm][monthKey]) prod[tm][monthKey]={sh:'',pal:0,zon:0,ps:0,sc:0};
+      if (!prod[tm][monthKey]) prod[tm][monthKey]={sh:'',pal:0,zon:0,ps:0,sc:0,cap:0};
 
       prod[tm][monthKey].pal += pal;
       prod[tm][monthKey].zon += zon;
       prod[tm][monthKey].ps  += ps;
       prod[tm][monthKey].sc  += sc;
-      if (sk && !prod[tm][monthKey].sh) prod[tm][monthKey].sh = sk;
+      prod[tm][monthKey].cap += cap;
+      // The sheet's own shift value wins for that month, even if the rest of
+      // the row is still zero-volume — this is what lets a mid-year shift
+      // move (e.g. A→B) show up correctly once that month's row is
+      // populated, rather than getting stuck on whichever shift was
+      // recorded first.
+      if (sk) prod[tm][monthKey].sh = sk;
     }
   }
+  dbg('Production workbook — sheets scanned', sheetsScanned);
+  dbg('Production workbook — LanIDs found', Object.keys(prod).length);
   return prod;
 }
 
@@ -296,12 +352,10 @@ function computeRows(errors, prod, selMon, allMons) {
     ? allMons[allMons.length-2]||null
     : (allMons.indexOf(selMon)>0 ? allMons[allMons.indexOf(selMon)-1] : null);
 
-  // Roster: union of TMs in prod OR errors for selected months
   const roster = new Set();
   for (const tm of Object.keys(prod))   { if (monthsToUse.some(m=>prod[tm][m]))   roster.add(tm); }
   for (const tm of Object.keys(errors)) { if (monthsToUse.some(m=>errors[tm][m])) roster.add(tm); }
 
-  // Single-month rate helpers (closures over prod/errors params)
   function szRate(tm, mon) {
     if (!mon) return null;
     const p = prod[tm]?.[mon]; const e = errors[tm]?.[mon];
@@ -315,49 +369,63 @@ function computeRows(errors, prod, selMon, allMons) {
     const sc = p?.sc||0; const se = e?.sErr||0;
     return sc>0 ? (se/sc)*100000 : (se>0?null:0);
   }
+  function skRate(tm, mon) {
+    if (!mon) return null;
+    const p = prod[tm]?.[mon]; const e = errors[tm]?.[mon];
+    const cap = p?.cap||0; const ke = e?.skuErr||0;
+    return cap>0 ? (ke/cap)*1000 : (ke>0?null:0);
+  }
 
-  // Aggregate per TM
   const raw = [];
   for (const tm of roster) {
-    let pal=0,zon=0,ps=0,sc=0,zErr=0,sErr=0,sh='',dept='receiving';
+    let pal=0,zon=0,ps=0,sc=0,cap=0,zErr=0,sErr=0,skuErr=0,sh='',dept='receiving';
 
+    // monthsToUse is chronologically ascending, so the LAST month with a
+    // recorded shift wins — a mid-year shift change (e.g. A→B) reflects the
+    // processor's current shift instead of getting stuck on the first one
+    // seen historically.
     for (const m of monthsToUse) {
       const p=prod[tm]?.[m], e=errors[tm]?.[m];
-      if (p) { pal+=p.pal; zon+=p.zon; ps+=p.ps; sc+=p.sc; if (!sh&&p.sh) sh=p.sh; }
-      if (e) { zErr+=e.zErr; sErr+=e.sErr; if (!sh&&e.sh) sh=e.sh; if (e.dept==='training') dept='training'; }
+      if (p) { pal+=p.pal; zon+=p.zon; ps+=p.ps; sc+=p.sc; cap+=p.cap; if (p.sh) sh=p.sh; }
+      if (e) { zErr+=e.zErr; sErr+=e.sErr; skuErr+=e.skuErr||0; if (e.sh) sh=e.sh; if (e.dept==='training') dept='training'; }
     }
 
     const volScore  = (pal+sc)*(sh==='c'?40/36:1);
     const placement = pal+zon;
     const zRate = placement>0 ? (zErr/placement)*10000 : (zErr>0?null:0);
     const sRate = sc>0        ? (sErr/sc)*100000        : (sErr>0?null:0);
+    const kRate = cap>0       ? (skuErr/cap)*1000        : (skuErr>0?null:0);
 
-    // Trend
-    let zTrend=0, sTrend=0;
+    let zTrend=0, sTrend=0, kTrend=0;
     if (tCurr && tPrev) {
       const zC=szRate(tm,tCurr), zP=szRate(tm,tPrev);
       const sC=ssRate(tm,tCurr), sP=ssRate(tm,tPrev);
+      const kC=skRate(tm,tCurr), kP=skRate(tm,tPrev);
       if (zC!==null && zP!==null) zTrend = zC>zP?1:zC<zP?-1:0;
       if (sC!==null && sP!==null) sTrend = sC>sP?1:sC<sP?-1:0;
+      if (kC!==null && kP!==null) kTrend = kC>kP?1:kC<kP?-1:0;
     }
 
-    raw.push({tm,sh,dept,pal,zon,ps,sc,zErr,sErr,zRate,sRate,volScore,zTrend,sTrend});
+    raw.push({tm,sh,dept,pal,zon,ps,sc,cap,zErr,sErr,skuErr,zRate,sRate,kRate,volScore,zTrend,sTrend,kTrend});
   }
 
   if (!raw.length) return [];
 
-  // Percentiles
+  // ACC% is now a 3-way average of zone, split, and SKU accuracy
+  // percentiles (equal weighting, per confirmed preference).
   const vols = raw.map(r=>r.volScore);
   const negZ  = raw.map(r=>r.zRate!==null ? -r.zRate : -Infinity);
   const negS  = raw.map(r=>r.sRate!==null ? -r.sRate : -Infinity);
+  const negK  = raw.map(r=>r.kRate!==null ? -r.kRate : -Infinity);
 
   return raw.map(r => {
     const vol  = pctRank(vols, r.volScore);
     const zAcc = pctRank(negZ, r.zRate!==null ? -r.zRate : -Infinity);
     const sAcc = pctRank(negS, r.sRate!==null ? -r.sRate : -Infinity);
-    const acc  = (zAcc+sAcc)/2;
+    const kAcc = pctRank(negK, r.kRate!==null ? -r.kRate : -Infinity);
+    const acc  = (zAcc+sAcc+kAcc)/3;
     const str  = (vol+acc)/2;
-    return {...r,vol,acc,str};
+    return {...r,vol,acc,kAcc,str};
   });
 }
 
@@ -387,17 +455,21 @@ function ColumnGuide({T,prevLabel}) {
     ['TM',       'LanID — processor identifier.'],
     ['STR',      'Strength score: average of VOL% and ACC% percentiles (0–100). ≥68 = ⭐ Star tier.'],
     ['VOL%',     'Volume percentile vs teammates. C-shift hours adjusted ×40/36. Higher = more output.'],
-    ['ACC%',     'Accuracy percentile: average of zone accuracy rank + split accuracy rank. Higher = fewer errors.'],
+    ['ACC%',     'Accuracy percentile: average of zone, split, and SKU accuracy ranks (equal weighting). Higher = fewer errors.'],
     ['ZONE',     'Zone/pallet errors per 10,000 placement actions (palletize units + zone assign totes). Green → red scale.'],
     ['ZPE',      'Raw zone/pallet error count for the selected period.'],
     ['SPLIT',    'Split-move errors per 100,000 split-case units. Light blue → dark blue scale.'],
     ['SPE',      'Raw split-move error count for the selected period.'],
+    ['SKU',      'SKU Maintenance Incorrect/Incomplete errors (Checkpoint 1 — Shipment) per 1,000 Capture Item Attribute actions. Amber → burnt-orange scale.'],
+    ['SKE',      'Raw SKU Maintenance error count for the selected period.'],
     ['PAL',      'Palletize units for the selected period.'],
     ['SC UNITS', 'Split-case units processed for the selected period.'],
+    ['CAP',      'Capture Item Attribute actions for the selected period — denominator for the SKU rate.'],
     ['SCANS',    'Process scan cases for the selected period.'],
-    ['SH',       'Shift assignment: A, B, or C.'],
+    ['SH',       'Shift assignment: A, B, or C — reflects the most recent month on record, so mid-period shift moves show correctly.'],
     ['Z▲',       `Zone error trend vs ${prevLabel||'prior month'}. ▲ = worsening, ▼ = improving, → = stable.`],
     ['S▲',       `Split error trend vs ${prevLabel||'prior month'}. ▲ = worsening, ▼ = improving, → = stable.`],
+    ['K▲',       `SKU error trend vs ${prevLabel||'prior month'}. ▲ = worsening, ▼ = improving, → = stable.`],
   ];
   return (
     <div>
@@ -407,6 +479,35 @@ function ColumnGuide({T,prevLabel}) {
           <span style={{minWidth:68,fontFamily:'DM Mono,monospace',fontSize:'.6rem',
             fontWeight:600,color:T.thAct,letterSpacing:'.05em'}}>{col}</span>
           <span style={{fontSize:'.62rem',color:T.muted}}>{desc}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Debug Panel ────────────────────────────────────────────────────────────────
+function DebugPanel({ T }) {
+  const [log, setLog] = useState(window.__dbgLog || []);
+  const [open, setOpen] = useState(true);
+  useEffect(() => {
+    const onLog = () => setLog([...(window.__dbgLog || [])]);
+    window.addEventListener('dbglog', onLog);
+    return () => window.removeEventListener('dbglog', onLog);
+  }, []);
+  if (!DEBUG) return null;
+  return (
+    <div style={{position:'fixed',bottom:0,left:0,right:0,maxHeight:open?'40vh':32,
+      overflowY:'auto',background:'#05070c',color:'#7dd3fc',
+      fontFamily:'DM Mono,monospace',fontSize:11,padding:'8px 14px',
+      borderTop:'2px solid #38bdf8',zIndex:999,whiteSpace:'pre-wrap',transition:'max-height .15s'}}>
+      <div style={{display:'flex',justifyContent:'space-between',color:'#fff',fontWeight:700,marginBottom:6,cursor:'pointer'}}
+        onClick={()=>setOpen(o=>!o)}>
+        <span>🐞 Debug Catcher (?debug=1) — {log.length} entries</span>
+        <span style={{color:'#f87171'}}>{open?'▾ collapse':'▸ expand'}</span>
+      </div>
+      {open && log.map((e,i)=>(
+        <div key={i} style={{marginBottom:8}}>
+          <b>{e.label}</b>{'\n'}{e.str}
         </div>
       ))}
     </div>
@@ -432,15 +533,19 @@ function App() {
   useEffect(()=>{
     (async()=>{
       try {
-        const [eRes,pRes] = await Promise.all([fetch(ERR_FILE),fetch(PROD_FILE)]);
+        const bust = `?t=${Date.now()}`;
+        const [eRes,pRes] = await Promise.all([fetch(ERR_FILE+bust),fetch(PROD_FILE+bust)]);
         if (!eRes.ok) throw new Error(`Cannot load ${ERR_FILE} (HTTP ${eRes.status}). Ensure the file is uploaded to your GitHub Pages directory.`);
         if (!pRes.ok) throw new Error(`Cannot load ${PROD_FILE} (HTTP ${pRes.status}). Ensure the file is uploaded to your GitHub Pages directory.`);
         const [eBuf,pBuf] = await Promise.all([eRes.arrayBuffer(),pRes.arrayBuffer()]);
         const eWb = XLSX.read(new Uint8Array(eBuf), {type:'array',cellDates:true});
         const pWb = XLSX.read(new Uint8Array(pBuf), {type:'array',cellDates:true});
+        dbg('Error workbook sheet names', eWb.SheetNames);
+        dbg('Production workbook sheet names', pWb.SheetNames);
         setErrors(parseErrors(eWb));
         setProd(parseProd(pWb));
       } catch(e) {
+        dbg('Load failed', e.message);
         setLoadErr(e.message);
       } finally {
         setLoading(false);
@@ -448,8 +553,6 @@ function App() {
     })();
   },[]);
 
-  // Sorted list of months with data — year-aware sort (see monthSortKey),
-  // so this stays correct as the workbook spans multiple fiscal years.
   const allMons = useMemo(()=>{
     const seen = new Set();
     if (errors) Object.values(errors).forEach(m=>Object.keys(m).forEach(k=>seen.add(k)));
@@ -469,7 +572,7 @@ function App() {
     let r=[...allRows];
     if (shiftFilt!=='all')   r=r.filter(x=>x.sh===shiftFilt);
     if (highlight==='star')  r=r.filter(x=>x.str>=68);
-    if (highlight==='coach') r=r.filter(x=>(x.zRate!==null&&x.zRate>3)||(x.sRate!==null&&x.sRate>15));
+    if (highlight==='coach') r=r.filter(x=>(x.zRate!==null&&x.zRate>3)||(x.sRate!==null&&x.sRate>15)||(x.kRate!==null&&x.kRate>10));
     r.sort((a,b)=>{
       const va=a[sortCol]??-Infinity, vb=b[sortCol]??-Infinity;
       if (typeof va==='string'&&typeof vb==='string') return sortDir*va.localeCompare(vb);
@@ -483,7 +586,6 @@ function App() {
     else {setSortCol(col);setSortDir(-1);}
   }
 
-  // Stats
   const deptZRate = useMemo(()=>{
     const ze=allRows.reduce((s,r)=>s+(r.zErr||0),0);
     const pl=allRows.reduce((s,r)=>s+((r.pal||0)+(r.zon||0)),0);
@@ -494,7 +596,12 @@ function App() {
     const sc=allRows.reduce((s,r)=>s+(r.sc||0),0);
     return sc>0?(se/sc)*100000:null;
   },[allRows]);
-  const coachCount = useMemo(()=>allRows.filter(r=>(r.zRate!==null&&r.zRate>3)||(r.sRate!==null&&r.sRate>15)).length,[allRows]);
+  const deptKRate = useMemo(()=>{
+    const ke=allRows.reduce((s,r)=>s+(r.skuErr||0),0);
+    const cap=allRows.reduce((s,r)=>s+(r.cap||0),0);
+    return cap>0?(ke/cap)*1000:null;
+  },[allRows]);
+  const coachCount = useMemo(()=>allRows.filter(r=>(r.zRate!==null&&r.zRate>3)||(r.sRate!==null&&r.sRate>15)||(r.kRate!==null&&r.kRate>10)).length,[allRows]);
   const starCount  = useMemo(()=>allRows.filter(r=>r.str>=68).length,[allRows]);
   const shiftCounts = useMemo(()=>({
     all:allRows.length,
@@ -525,8 +632,6 @@ function App() {
         .sth:hover{color:${T.thAct}!important}
         select{font-family:'DM Mono',monospace;outline:none}
         @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
-        /* Uniform header buttons — Hub / Print / Theme — matches Weekly,
-           Monthly Error, YTD, Heat Map, and Processor Error Card reports */
         .hdr-btn{display:flex;align-items:center;gap:6px;background:${T.cardBg};
           border:1px solid ${T.cardBdr};border-radius:20px;padding:7px 14px;
           cursor:pointer;font-size:12px;font-weight:700;color:${T.text};
@@ -606,6 +711,9 @@ function App() {
               {label:'DEPT SPLIT RATE /100k',
                value:deptSRate!=null?deptSRate.toFixed(2):'—',
                color:deptSRate!=null?(deptSRate>15?'#dc2626':deptSRate>8?'#d97706':'#2563eb'):'#94a3b8'},
+              {label:'DEPT SKU RATE /1k',
+               value:deptKRate!=null?deptKRate.toFixed(2):'—',
+               color:deptKRate!=null?(deptKRate>10?'#dc2626':deptKRate>5?'#d97706':'#c2410c'):'#94a3b8'},
               {label:'🔴 COACH FLAGS', value:coachCount, color:'#dc2626'},
               {label:'⭐ STAR TIER',   value:starCount,  color:'#92400e'},
               {label:'TOTAL TMs',      value:allRows.length, color:T.text},
@@ -628,7 +736,6 @@ function App() {
           <div className="no-print" style={{display:'flex',alignItems:'center',gap:'.5rem',
             flexWrap:'wrap',marginBottom:'.85rem'}}>
 
-            {/* Period selector */}
             <select value={selMon} onChange={e=>setSelMon(e.target.value)} style={{
               background:T.selBg,border:`1px solid ${T.selBdr}`,color:T.selTxt,
               borderRadius:6,padding:'.3rem .55rem',fontSize:'.68rem',
@@ -637,7 +744,6 @@ function App() {
               {allMons.map(m=><option key={m} value={m}>{m}</option>)}
             </select>
 
-            {/* Shift pills */}
             <div style={{display:'flex',gap:'.15rem',background:T.pillCont,
               borderRadius:8,padding:'.18rem'}}>
               {[
@@ -662,7 +768,6 @@ function App() {
               })}
             </div>
 
-            {/* Highlight pills */}
             <div style={{display:'flex',gap:'.15rem',background:T.pillCont,
               borderRadius:8,padding:'.18rem'}}>
               {[
@@ -694,7 +799,7 @@ function App() {
             marginBottom:'.75rem',fontSize:'.55rem',color:T.muted}}>
             <span style={{letterSpacing:'.07em'}}>ZONE</span>
             {[[0,'0'],[1,'1'],[3,'3'],[6,'6'],[8,'8+']].map(([v,l])=>(
-              <div key={l} style={{display:'flex',alignItems:'center',gap:'.2rem'}}>
+              <div key={'z'+l} style={{display:'flex',alignItems:'center',gap:'.2rem'}}>
                 <div style={{width:14,height:10,borderRadius:2,
                   background:v===0?(dark?'#14352a':'#dcfce7'):zoneColor(v,dark),
                   border:`1px solid ${T.swatchBdr}`}}/>
@@ -704,9 +809,19 @@ function App() {
             <span style={{color:T.faint,margin:'0 .15rem'}}>|</span>
             <span style={{letterSpacing:'.07em'}}>SPLIT</span>
             {[[0,'0'],[5,'5'],[15,'15'],[25,'25'],[30,'30+']].map(([v,l])=>(
-              <div key={l} style={{display:'flex',alignItems:'center',gap:'.2rem'}}>
+              <div key={'s'+l} style={{display:'flex',alignItems:'center',gap:'.2rem'}}>
                 <div style={{width:14,height:10,borderRadius:2,
                   background:v===0?(dark?'#0f1e3a':'#eff6ff'):splitColor(v,dark),
+                  border:`1px solid ${T.swatchBdr}`}}/>
+                <span>{l}</span>
+              </div>
+            ))}
+            <span style={{color:T.faint,margin:'0 .15rem'}}>|</span>
+            <span style={{letterSpacing:'.07em'}}>SKU</span>
+            {[[0,'0'],[2,'2'],[5,'5'],[10,'10'],[15,'15+']].map(([v,l])=>(
+              <div key={'k'+l} style={{display:'flex',alignItems:'center',gap:'.2rem'}}>
+                <div style={{width:14,height:10,borderRadius:2,
+                  background:v===0?(dark?'#3a2a0f':'#fef3c7'):skuColor(v,dark),
                   border:`1px solid ${T.swatchBdr}`}}/>
                 <span>{l}</span>
               </div>
@@ -726,7 +841,7 @@ function App() {
           <div style={{background:T.tblBg,border:`1px solid ${T.tblBdr}`,
             borderRadius:12,overflow:'hidden',boxShadow:T.cardShd}}>
             <div style={{overflowX:'auto'}}>
-              <table style={{width:'100%',borderCollapse:'collapse',minWidth:760}}>
+              <table style={{width:'100%',borderCollapse:'collapse',minWidth:940}}>
                 <thead>
                   <tr style={{background:T.thBg}}>
                     {COLS.map(c=>{
@@ -760,7 +875,7 @@ function App() {
                   )}
                   {rows.map((r,i)=>{
                     const isStar  = r.str>=68;
-                    const isCoach = (r.zRate!==null&&r.zRate>3)||(r.sRate!==null&&r.sRate>15);
+                    const isCoach = (r.zRate!==null&&r.zRate>3)||(r.sRate!==null&&r.sRate>15)||(r.kRate!==null&&r.kRate>10);
                     const sm      = SHIFT_META[r.sh]||{};
                     const rowBg   = i%2===0?T.rowE:T.rowO;
                     const bLeft   = isStar?'3px solid #2563eb':isCoach?'3px solid #dc2626':'3px solid transparent';
@@ -773,7 +888,6 @@ function App() {
                     return (
                       <tr key={r.tm} className="tbl-row"
                         style={{borderLeft:bLeft}}>
-                        {/* TM */}
                         <td style={{padding:'.42rem .45rem',fontSize:'.7rem',fontWeight:600,
                           background:rowBg,color:isStar?T.tmStar:T.tmNorm,
                           borderBottom:`1px solid ${T.rowBdr}`,whiteSpace:'nowrap'}}>
@@ -789,43 +903,43 @@ function App() {
                             </span>
                           )}
                         </td>
-                        {/* STR */}
                         {td(<StrBar pct={r.str} T={T}/>,{textAlign:'left'})}
-                        {/* VOL% */}
                         {td(<span style={{fontSize:'.65rem',fontWeight:600,color:T.numTxt}}>{Math.round(r.vol)}</span>,{textAlign:'center'})}
-                        {/* ACC% */}
                         {td(<span style={{fontSize:'.65rem',fontWeight:600,color:T.numTxt}}>{Math.round(r.acc)}</span>,{textAlign:'center'})}
-                        {/* ZONE rate */}
                         <td style={{padding:'.42rem .45rem',textAlign:'center',
                           fontSize:'.65rem',fontWeight:700,
                           background:zoneColor(r.zRate,dark),color:zoneFg(r.zRate,dark),
                           borderBottom:`1px solid ${T.rowBdr}`}}>
                           {r.zRate===null?'—':r.zRate.toFixed(1)}
                         </td>
-                        {/* ZPE */}
                         {td(<span style={{fontSize:'.65rem',fontWeight:600,
                           color:r.zErr>0?T.zErrTxt:T.muted}}>
                           {r.zErr||'—'}
                         </span>,{textAlign:'center'})}
-                        {/* SPLIT rate */}
                         <td style={{padding:'.42rem .45rem',textAlign:'center',
                           fontSize:'.65rem',fontWeight:700,
                           background:splitColor(r.sRate,dark),color:splitFg(r.sRate,dark),
                           borderBottom:`1px solid ${T.rowBdr}`}}>
                           {r.sRate===null?'—':r.sRate.toFixed(1)}
                         </td>
-                        {/* SPE */}
                         {td(<span style={{fontSize:'.65rem',fontWeight:600,
                           color:r.sErr>0?T.sErrTxt:T.muted}}>
                           {r.sErr||'—'}
                         </span>,{textAlign:'center'})}
-                        {/* PAL */}
+                        <td style={{padding:'.42rem .45rem',textAlign:'center',
+                          fontSize:'.65rem',fontWeight:700,
+                          background:skuColor(r.kRate,dark),color:skuFg(r.kRate,dark),
+                          borderBottom:`1px solid ${T.rowBdr}`}}>
+                          {r.kRate===null?'—':r.kRate.toFixed(1)}
+                        </td>
+                        {td(<span style={{fontSize:'.65rem',fontWeight:600,
+                          color:r.skuErr>0?T.kErrTxt:T.muted}}>
+                          {r.skuErr||'—'}
+                        </span>,{textAlign:'center'})}
                         {td(<span style={{fontSize:'.65rem',color:T.numTxt}}>{fmtN(r.pal)}</span>,{textAlign:'center'})}
-                        {/* SC UNITS */}
                         {td(<span style={{fontSize:'.65rem',color:T.numTxt}}>{fmtN(r.sc)}</span>,{textAlign:'center'})}
-                        {/* SCANS */}
+                        {td(<span style={{fontSize:'.65rem',color:T.numTxt}}>{fmtN(r.cap)}</span>,{textAlign:'center'})}
                         {td(<span style={{fontSize:'.65rem',color:T.numTxt}}>{fmtN(r.ps)}</span>,{textAlign:'center'})}
-                        {/* SH badge */}
                         {td(
                           <span style={{display:'inline-block',padding:'.1rem .3rem',
                             borderRadius:4,fontSize:'.58rem',fontWeight:700,
@@ -834,10 +948,9 @@ function App() {
                             {r.sh?r.sh.toUpperCase():'—'}
                           </span>,{textAlign:'center'}
                         )}
-                        {/* Z trend */}
                         {td(<TrendCell val={r.zTrend} T={T}/>,{textAlign:'center'})}
-                        {/* S trend */}
                         {td(<TrendCell val={r.sTrend} T={T}/>,{textAlign:'center'})}
+                        {td(<TrendCell val={r.kTrend} T={T}/>,{textAlign:'center'})}
                       </tr>
                     );
                   })}
@@ -863,6 +976,8 @@ function App() {
           </div>
         </>
       )}
+
+      <DebugPanel T={T} />
     </div>
   );
 }
