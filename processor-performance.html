@@ -35,6 +35,7 @@ const SHIFT_META = {
 const ERR_FILE  = 'AI_Safe_Weekly_Error_Data.xlsx';
 const PROD_FILE = 'AI-safe-monthly-processing-data.xlsx';
 const HUB_URL   = 'https://jacobbecicka.github.io/Test/index.html';
+const GUIDE_URL = 'guide.html';
 
 const FW_SHEET_RE = /^FW\s*\d+\s+\d+$/i;
 
@@ -663,6 +664,7 @@ function App() {
         <div className="no-print" style={{display:'flex',alignItems:'center',gap:'.6rem'}}>
           <a href={HUB_URL} className="hdr-btn">← Hub</a>
           <button className="hdr-btn" onClick={()=>window.print()}>🖨️ Print / Save PDF</button>
+          <a href={GUIDE_URL} className="hdr-btn">📖 Field Guide</a>
           <button className="hdr-btn" onClick={()=>setDark(d=>!d)}>{dark?'☀️ Light':'🌙 Dark'}</button>
         </div>
       </div>
