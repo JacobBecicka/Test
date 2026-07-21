@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Error Type Treemap · MWFC Receiving</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root {
+    --page-bg: linear-gradient(160deg, #f1f5f9, #e2e8f0);
+    --card: #ffffff;
+    --card-border: #e2e8f0;
+    --text-primary: #0f172a;
+    --text-second: #475569;
+    --text-muted: #94a3b8;
+    --shadow: 0 2px 12px rgba(0,0,0,0.07);
+    --row-alt: #f8fafc;
+  }
+  .dark {
+    --page-bg: linear-gradient(160deg, #0f172a, #111827);
+    --card: #111827;
+    --card-border: #1e293b;
+    --text-primary: #f1f5f9;
+    --text-second: #94a3b8;
+    --text-muted: #64748b;
+    --shadow: 0 2px 14px rgba(0,0,0,0.35);
+    --row-alt: #0b1220;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--page-bg);
+    min-height: 100vh;
+    padding: 28px 16px 80px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    transition: background 0.25s;
+    color: var(--text-primary);
+  }
+  .container { max-width: 1000px; margin: 0 auto; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    padding: 20px 22px;
+    margin-bottom: 18px;
+    box-shadow: var(--shadow);
+    transition: background 0.25s, border-color 0.25s;
+  }
+
+  /* Uniform header buttons — matches Weekly / Monthly / YTD / Heat Map */
+  .hdr-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--card); border: 1px solid var(--card-border);
+    border-radius: 20px; padding: 7px 14px; cursor: pointer;
+    font-size: 12px; font-weight: 700; color: var(--text-primary);
+    box-shadow: var(--shadow); white-space: nowrap; text-decoration: none;
+    transition: opacity 0.15s;
+  }
+  .hdr-btn:hover { opacity: 0.8; }
+
+  .top-nav {
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 10px; margin-bottom: 18px;
+  }
+  .top-nav-left h1 {
+    font-size: 20px; font-weight: 800; letter-spacing: -0.3px; color: var(--text-primary);
+  }
+  .top-nav-left .sub { font-size: 12.5px; color: var(--text-second); margin-top: 2px; }
+  .top-nav-right { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  select.hdr-select {
+    -webkit-appearance: none; appearance: none;
+    background: var(--card); border: 1px solid var(--card-border);
+    border-radius: 20px; padding: 7px 30px 7px 14px; cursor: pointer;
+    font-size: 12px; font-weight: 700; color: var(--text-primary);
+    box-shadow: var(--shadow);
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%2394a3b8'/></svg>");
+    background-repeat: no-repeat; background-position: right 12px center;
+  }
+
+  .fw-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .fw-row label { font-size: 12.5px; font-weight: 700; color: var(--text-second); }
+
+  .subtotal-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .subtotal-btn {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 10px; cursor: pointer;
+    background: transparent; border: 1px solid var(--card-border);
+    font-size: 12.5px; color: var(--text-second); transition: all 0.15s;
+  }
+  .subtotal-btn strong { color: var(--text-primary); }
+  .subtotal-btn.active { border-width: 1px; }
+  .subtotal-swatch { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+  .clear-filter-link {
+    font-size: 12px; color: var(--text-second); background: none; border: none;
+    text-decoration: underline; cursor: pointer; padding: 6px 4px;
+  }
+
+  .chart-wrap { width: 100%; height: 500px; position: relative; }
+  .chart-wrap svg { width: 100%; height: 100%; display: block; }
+
+  .cell-group { cursor: pointer; }
+  .cell-rect { transition: filter 0.18s ease-out, stroke 0.18s ease-out; }
+  .cell-group:hover .cell-rect { filter: url(#cellShadow); stroke: var(--text-primary); stroke-width: 2; }
+  .cell-group:hover .cell-inner { transform-box: fill-box; transform-origin: center; transform: scale(1.03); }
+  .cell-inner { transition: transform 0.15s ease-out; }
+  .cell-label-count { font-size: 12px; font-weight: 700; fill: #0f172a; pointer-events: none; }
+  .cell-label-name { font-size: 9px; fill: #1e293b; pointer-events: none; }
+  .group-label { font-size: 12px; font-weight: 700; pointer-events: none; }
+
+  .skeleton-block {
+    fill: var(--card-border);
+    opacity: 0.6;
+    animation: pulseFade 1.4s ease-in-out infinite;
+  }
+  @keyframes pulseFade { 0% { opacity: .35; } 50% { opacity: .7; } 100% { opacity: .35; } }
+
+  #loading-wrap, #error-wrap {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 50vh; gap: 14px; text-align: center; padding: 24px;
+  }
+  .spinner {
+    width: 40px; height: 40px; border: 4px solid var(--card-border);
+    border-top-color: #0284C7; border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #app-content { display: none; }
+
+  #debug-panel {
+    margin-top: 14px; background: var(--row-alt); border: 1px solid var(--card-border);
+    border-radius: 12px; padding: 12px; font-family: 'SF Mono', Consolas, monospace;
+    font-size: 11px; color: var(--text-second); max-height: 180px; overflow-y: auto;
+  }
+  #debug-panel .dbg-title { color: var(--text-primary); font-weight: 700; margin-bottom: 6px; }
+  .dbg-error { color: #f87171; }
+  .dbg-warn { color: #fbbf24; }
+
+  .no-print { }
+  .err-print-only { display: none; }
+
+  @media print {
+    @page { size: landscape; margin: 0.35in; }
+    html, body { background: #ffffff !important; }
+    .no-print { display: none !important; }
+    .err-print-only { display: block !important; }
+    body { padding: 0 !important; }
+    .card {
+      background: #ffffff !important; color: #0f172a !important;
+      border: 1px solid #cbd5e1 !important; box-shadow: none !important;
+      page-break-inside: avoid;
+    }
+    .card, .card * { color: #0f172a !important; }
+    .chart-wrap { height: 6.8in !important; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Loading state -->
+  <div id="loading-wrap">
+    <div class="spinner"></div>
+    <div style="font-size:14px;font-weight:600;color:var(--text-second)">Loading workbook from GitHub…</div>
+  </div>
+
+  <!-- Error state -->
+  <div id="error-wrap" style="display:none">
+    <div style="font-size:40px">⚠️</div>
+    <div style="font-size:15px;font-weight:700;color:var(--text-primary)">Unable to load workbook</div>
+    <div id="error-msg" style="font-size:13px;color:var(--text-second);max-width:380px"></div>
+    <div style="display:flex;gap:8px;margin-top:6px">
+      <button class="hdr-btn" onclick="init()">↺ Retry</button>
+      <a class="hdr-btn" href="index.html">← Hub</a>
+    </div>
+  </div>
+
+  <!-- Main app content -->
+  <div id="app-content">
+
+    <div class="top-nav no-print">
+      <div class="top-nav-left">
+        <h1>Error Type Treemap</h1>
+        <div class="sub">Nordstrom MWFC Receiving · <span id="fy-sub-label"></span></div>
+      </div>
+      <div class="top-nav-right">
+        <select class="hdr-select" id="fy-select" onchange="onFYChange(this.value)"></select>
+        <a class="hdr-btn" href="index.html">← Hub</a>
+        <button class="hdr-btn" id="debug-btn" onclick="toggleDebug()">🐞 Debug</button>
+        <button class="hdr-btn" id="theme-btn" onclick="toggleTheme()">🌙 Dark</button>
+        <button class="hdr-btn" onclick="window.print()">🖨️ Print / Save PDF</button>
+      </div>
+    </div>
+
+    <div class="fw-row no-print">
+      <label for="fw-select">Fiscal week:</label>
+      <select class="hdr-select" id="fw-select" onchange="onWeekChange(this.value)"></select>
+    </div>
+
+    <div class="err-print-only" id="print-summary" style="font-size:12px;margin-bottom:10px;color:#334155"></div>
+
+    <div class="card">
+      <div style="font-size:13px;color:var(--text-second);margin-bottom:10px" id="context-label"></div>
+      <div class="subtotal-row" id="subtotal-row"></div>
+      <div class="chart-wrap" id="chart-wrap"></div>
+    </div>
+
+    <div id="debug-panel" class="no-print" style="display:none">
+      <div class="dbg-title">DEBUG LOG</div>
+      <div id="debug-log"></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   CONFIG
+   ============================================================ */
+const REPO_RAW = 'https://raw.githubusercontent.com/JacobBecicka/Receiving_Error_Dashboard/main';
+const WORKBOOK = 'AI_Safe_Weekly_Error_Data.xlsx';
+const CHECKPOINT_COLOR = { Shipment: '#38BDF8', Piece: '#A78BFA', Carton: '#34D399' };
+
+/* ============================================================
+   STATE
+   ============================================================ */
+let ALL_DATA = {};          // { FY2026: { 17: {total, Shipment:{}, Piece:{}, Carton:{}} } }
+let FISCAL_YEARS = [];
+let CURRENT_FY = null;
+let selectedFY = null;
+let selectedWeek = 'all';
+let activeCheckpoints = [];  // multi-select filter
+let darkMode = false;
+let debugOpen = new URLSearchParams(window.location.search).get('debug') === '1';
+let debugLog = [];
+
+function logDebug(msg, level) {
+  debugLog.push({ msg, level: level || 'info', time: new Date().toLocaleTimeString() });
+  if (debugLog.length > 200) debugLog.shift();
+  if (debugOpen) renderDebugPanel();
+}
+
+/* ============================================================
+   FYI / NOT-AN-ERROR EXCLUSION  (validated against source workbook —
+   only ';' separates multiple distinct errors in a cell; '/' is part
+   of some labels themselves, e.g. "Incorrect/Incomplete", so it must
+   NOT be treated as a delimiter)
+   ============================================================ */
+const FW_SHEET_RE = /^FW\s*(\d+)\s+(\d+)$/i;
+const FYI_PATTERN = /fyi\s*only|not\s+an\s+error|\bfyi\b/i;
+const NO_ERR_TEST = /no\s*errors?/i;
+const NO_ERR_FULL = /^no\s*errors?$/i;
+const NO_ERR_SUFFIX = /\s*\/\s*no\s*errors?\s*$/i;
+
+function parseCheckpointCell(val, isFyi) {
+  let s = String(val == null ? '' : val).replace(/\xa0/g, ' ').trim();
+  if (!s) return [];
+  if (isFyi && NO_ERR_TEST.test(s)) return [];
+  const out = [];
+  s.split(';').forEach(part => {
+    let p = part.trim().replace(NO_ERR_SUFFIX, '').trim();
+    if (p && !NO_ERR_FULL.test(p)) out.push(p);
+  });
+  return out;
+}
+
+// Nordstrom fiscal year convention: FY<N> runs roughly Feb(cal N)→Jan(cal N+1).
+function currentFiscalYear() {
+  const now = new Date();
+  const calYear = now.getFullYear();
+  const month = now.getMonth(); // 0 = January
+  return month === 0 ? calYear - 1 : calYear;
+}
+
+/* ============================================================
+   PARSE WORKBOOK
+   ============================================================ */
+function parseWorkbook(wb) {
+  const fyData = {};
+
+  wb.SheetNames.forEach(name => {
+    const m = name.match(FW_SHEET_RE);
+    if (!m) return;
+    const fw = parseInt(m[1], 10);
+    const fy = `FY20${m[2]}`;
+
+    const ws = wb.Sheets[name];
+    const all = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    if (all.length < 6) return;
+
+    const hdr = (all[4] || []).map(h =>
+      String(h == null ? '' : h).replace(/\xa0/g, '').trim().replace(/:$/, '').replace(/\s+/g, ' ')
+    );
+    const ci = n => hdr.findIndex(h => h.toLowerCase() === n.toLowerCase());
+
+    const iShip = ci('Shipment Error (Checkpoint 1)');
+    const iPiece = ci('Piece Error (Checkpoint 2)');
+    const iCart = ci('Carton Error (Checkpoint 3)');
+    const iCmt = ci('Comments');
+
+    if (iShip < 0 || iPiece < 0 || iCart < 0) {
+      logDebug(`${name}: missing expected checkpoint columns — sheet skipped`, 'warn');
+      return;
+    }
+
+    const shipCounts = {}, pieceCounts = {}, cartCounts = {};
+    let rowTotal = 0;
+
+    all.slice(5).forEach(row => {
+      if (!row || row.every(c => c === '' || c == null)) return;
+      rowTotal++;
+
+      const comment = String(iCmt >= 0 ? (row[iCmt] || '') : '');
+      const isFyi = FYI_PATTERN.test(comment);
+
+      parseCheckpointCell(row[iShip], isFyi).forEach(t => { shipCounts[t] = (shipCounts[t] || 0) + 1; });
+      parseCheckpointCell(row[iPiece], isFyi).forEach(t => { pieceCounts[t] = (pieceCounts[t] || 0) + 1; });
+      parseCheckpointCell(row[iCart], isFyi).forEach(t => { cartCounts[t] = (cartCounts[t] || 0) + 1; });
+    });
+
+    if (!fyData[fy]) fyData[fy] = {};
+    fyData[fy][fw] = { total: rowTotal, Shipment: shipCounts, Piece: pieceCounts, Carton: cartCounts };
+    logDebug(`Parsed ${name}: ${rowTotal} rows`);
+  });
+
+  return fyData;
+}
+
+/* ============================================================
+   SQUARIFIED TREEMAP LAYOUT
+   (classic Bruls/Huizing/van Wijk algorithm — verified against
+   area-conservation and no-overlap tests before shipping)
+   ============================================================ */
+function squarify(items, x, y, w, h) {
+  const out = [];
+  const data = items.filter(i => i.value > 0).sort((a, b) => b.value - a.value);
+  const total = data.reduce((s, i) => s + i.value, 0);
+  if (total <= 0 || w <= 0 || h <= 0) return out;
+  const area = w * h;
+  const scaled = data.map(d => Object.assign({}, d, { a: (d.value / total) * area }));
+
+  function worst(row, length) {
+    if (!row.length) return Infinity;
+    const sum = row.reduce((s, r) => s + r.a, 0);
+    const max = Math.max.apply(null, row.map(r => r.a));
+    const min = Math.min.apply(null, row.map(r => r.a));
+    return Math.max((length * length * max) / (sum * sum), (sum * sum) / (length * length * min));
+  }
+
+  function layoutRow(row, rx, ry, rw, rh, horizontal) {
+    const sum = row.reduce((s, r) => s + r.a, 0);
+    let offset = 0;
+    row.forEach(r => {
+      if (horizontal) {
+        const thickness = rw ? sum / rw : 0;
+        const itemW = thickness ? r.a / thickness : 0;
+        out.push(Object.assign({}, r, { x: rx + offset, y: ry, w: itemW, h: thickness }));
+        offset += itemW;
+      } else {
+        const thickness = rh ? sum / rh : 0;
+        const itemH = thickness ? r.a / thickness : 0;
+        out.push(Object.assign({}, r, { x: rx, y: ry + offset, w: thickness, h: itemH }));
+        offset += itemH;
+      }
+    });
+  }
+
+  let items2 = scaled.slice();
+  let cx = x, cy = y, cw = w, ch = h;
+
+  while (items2.length) {
+    const horizontal = cw >= ch;
+    const length = horizontal ? ch : cw;
+    let row = [items2[0]];
+    let bestWorst = worst(row, length);
+    let i = 1;
+    while (i < items2.length) {
+      const trial = row.concat([items2[i]]);
+      const w2 = worst(trial, length);
+      if (w2 <= bestWorst) { row = trial; bestWorst = w2; i++; }
+      else break;
+    }
+    const rowSum = row.reduce((s, r) => s + r.a, 0);
+    if (horizontal) {
+      const thickness = ch ? rowSum / ch : 0;
+      layoutRow(row, cx, cy, thickness, ch, false);
+      cx += thickness; cw -= thickness;
+    } else {
+      const thickness = cw ? rowSum / cw : 0;
+      layoutRow(row, cx, cy, cw, thickness, true);
+      cy += thickness; ch -= thickness;
+    }
+    items2 = items2.slice(row.length);
+  }
+  return out;
+}
+
+/* ============================================================
+   DATA HELPERS
+   ============================================================ */
+function getWeeksForYear(fy) {
+  return Object.keys(ALL_DATA[fy] || {}).map(Number).sort((a, b) => a - b);
+}
+
+function buildGroups(fy, week) {
+  // returns [{name, value, children:[{name,value}]}] for the 3 checkpoints,
+  // aggregated across all weeks in the FY, or a single week if specified.
+  const weeks = week === 'all' ? getWeeksForYear(fy) : [Number(week)];
+  const agg = { Shipment: {}, Piece: {}, Carton: {} };
+  weeks.forEach(w => {
+    const wd = (ALL_DATA[fy] || {})[w];
+    if (!wd) return;
+    ['Shipment', 'Piece', 'Carton'].forEach(cp => {
+      Object.entries(wd[cp]).forEach(([type, count]) => {
+        agg[cp][type] = (agg[cp][type] || 0) + count;
+      });
+    });
+  });
+  return ['Shipment', 'Piece', 'Carton']
+    .filter(cp => Object.keys(agg[cp]).length > 0)
+    .map(cp => ({
+      name: cp,
+      value: Object.values(agg[cp]).reduce((a, b) => a + b, 0),
+      children: Object.entries(agg[cp]).map(([name, value]) => ({ name, value, checkpoint: cp })),
+    }));
+}
+
+/* ============================================================
+   COLOR HELPERS
+   ============================================================ */
+function hexToRgb(hex) {
+  const h = hex.replace('#', '');
+  return { r: parseInt(h.substring(0, 2), 16), g: parseInt(h.substring(2, 4), 16), b: parseInt(h.substring(4, 6), 16) };
+}
+function rgbToHex(r, g, b) {
+  const c = n => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
+  return `#${c(r)}${c(g)}${c(b)}`;
+}
+function lighten(hex, amt) {
+  const { r, g, b } = hexToRgb(hex);
+  return rgbToHex(r + (255 - r) * amt, g + (255 - g) * amt, b + (255 - b) * amt);
+}
+function darken(hex, amt) {
+  const { r, g, b } = hexToRgb(hex);
+  return rgbToHex(r * (1 - amt), g * (1 - amt), b * (1 - amt));
+}
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/* ============================================================
+   RENDER: TREEMAP SVG
+   ============================================================ */
+function renderChart() {
+  const wrap = document.getElementById('chart-wrap');
+  const W = wrap.clientWidth || 800;
+  const H = wrap.clientHeight || 500;
+
+  let groups = buildGroups(selectedFY, selectedWeek);
+  if (activeCheckpoints.length) {
+    groups = groups.filter(g => activeCheckpoints.includes(g.name));
+  }
+
+  if (!groups.length) {
+    wrap.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:13px">No errors recorded for this selection.</div>`;
+    return;
+  }
+
+  const groupRects = squarify(groups, 0, 0, W, H);
+
+  let defs = `<defs>`;
+  Object.entries(CHECKPOINT_COLOR).forEach(([cp, color]) => {
+    defs += `<linearGradient id="grad-${cp}" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="${lighten(color, 0.22)}" />
+      <stop offset="100%" stop-color="${darken(color, 0.12)}" />
+    </linearGradient>`;
+  });
+  defs += `<filter id="cellShadow" x="-40%" y="-40%" width="180%" height="180%">
+    <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="${darkMode ? '#000000' : '#1e293b'}" flood-opacity="0.35"/>
+  </filter>`;
+  defs += `</defs>`;
+
+  let svgBody = '';
+
+  groupRects.forEach(g => {
+    // Group header wash (subtle background tint + label if room)
+    svgBody += `<rect x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" rx="8" ry="8"
+      fill="${CHECKPOINT_COLOR[g.name]}" opacity="0.12" />`;
+    if (g.w > 60 && g.h > 20) {
+      svgBody += `<text class="group-label" x="${g.x + 8}" y="${g.y + 18}" fill="${darkMode ? '#e2e8f0' : '#1e293b'}">${esc(g.name)}</text>`;
+    }
+
+    const childRects = squarify(g.children, g.x, g.y, g.w, g.h);
+    childRects.forEach(c => {
+      const key = `${c.checkpoint}||${c.name}`;
+      const gradId = `grad-${c.checkpoint}`;
+      const rx = c.x + 1.5, ry = c.y + 1.5;
+      const rw = Math.max(c.w - 3, 0), rh = Math.max(c.h - 3, 0);
+      svgBody += `<g class="cell-group" data-key="${esc(key)}" tabindex="0">
+        <g class="cell-inner">
+          <rect class="cell-rect" x="${rx}" y="${ry}" width="${rw}" height="${rh}" rx="6" ry="6"
+            fill="url(#${gradId})" stroke="${darkMode ? '#0f172a' : '#ffffff'}" stroke-width="1.5" />
+          ${rw > 40 && rh > 18 ? `<text class="cell-label-count" x="${c.x + c.w / 2}" y="${c.y + c.h / 2 - 4}" text-anchor="middle">${c.value}</text>` : ''}
+          ${rw > 70 && rh > 34 ? `<text class="cell-label-name" x="${c.x + c.w / 2}" y="${c.y + c.h / 2 + 11}" text-anchor="middle">${esc(c.name.length > 24 ? c.name.slice(0, 22) + '…' : c.name)}</text>` : ''}
+        </g>
+        <title>${esc(c.name)} (${c.checkpoint}): ${c.value}</title>
+      </g>`;
+    });
+  });
+
+  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${defs}${svgBody}</svg>`;
+}
+
+/* ============================================================
+   RENDER: SKELETON (loading placeholder inside chart area)
+   ============================================================ */
+function renderSkeleton() {
+  const wrap = document.getElementById('chart-wrap');
+  const W = 800, H = 500;
+  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <rect class="skeleton-block" x="0" y="0" width="${W * 0.65}" height="${H * 0.7}" rx="8" />
+    <rect class="skeleton-block" x="${W * 0.66}" y="0" width="${W * 0.34}" height="${H * 0.4}" rx="8" style="animation-delay:.2s" />
+    <rect class="skeleton-block" x="${W * 0.66}" y="${H * 0.42}" width="${W * 0.34}" height="${H * 0.28}" rx="8" style="animation-delay:.4s" />
+    <rect class="skeleton-block" x="0" y="${H * 0.72}" width="${W}" height="${H * 0.28}" rx="8" style="animation-delay:.6s" />
+  </svg>`;
+}
+
+/* ============================================================
+   RENDER: SUBTOTAL BUTTONS (checkpoint filter, click to add/remove)
+   ============================================================ */
+function renderSubtotals() {
+  const row = document.getElementById('subtotal-row');
+  const groups = buildGroups(selectedFY, selectedWeek); // unfiltered, for true totals
+  let html = '';
+  ['Shipment', 'Piece', 'Carton'].forEach(cp => {
+    const g = groups.find(x => x.name === cp);
+    const total = g ? g.value : 0;
+    const active = activeCheckpoints.includes(cp);
+    html += `<button class="subtotal-btn${active ? ' active' : ''}" onclick="toggleCheckpoint('${cp}')"
+      style="${active ? `border-color:${CHECKPOINT_COLOR[cp]};background:${CHECKPOINT_COLOR[cp]}22` : ''}">
+      <span class="subtotal-swatch" style="background:${CHECKPOINT_COLOR[cp]}"></span>
+      ${cp}: <strong>${total}</strong>
+    </button>`;
+  });
+  if (activeCheckpoints.length) {
+    html += `<button class="clear-filter-link" onclick="clearCheckpointFilter()">Clear filter (${activeCheckpoints.length})</button>`;
+  }
+  row.innerHTML = html;
+}
+
+function toggleCheckpoint(cp) {
+  const i = activeCheckpoints.indexOf(cp);
+  if (i >= 0) activeCheckpoints.splice(i, 1);
+  else activeCheckpoints.push(cp);
+  logDebug(activeCheckpoints.length ? `Filtered to ${activeCheckpoints.join(', ')}` : 'Cleared checkpoint filter');
+  renderSubtotals();
+  renderChart();
+  renderPrintSummary();
+}
+
+function clearCheckpointFilter() {
+  activeCheckpoints = [];
+  logDebug('Cleared checkpoint filter');
+  renderSubtotals();
+  renderChart();
+  renderPrintSummary();
+}
+
+/* ============================================================
+   RENDER: CONTEXT LABEL / PRINT SUMMARY
+   ============================================================ */
+function renderContextLabel() {
+  const weekLabel = selectedWeek === 'all' ? 'All weeks' : `FW${selectedWeek}`;
+  document.getElementById('context-label').textContent = `${selectedFY.replace('FY20', 'FY')} · ${weekLabel}`;
+  document.getElementById('fy-sub-label').textContent = selectedFY.replace('FY20', 'FY');
+}
+
+function renderPrintSummary() {
+  const weekLabel = selectedWeek === 'all' ? 'All weeks' : `FW${selectedWeek}`;
+  const filterLabel = activeCheckpoints.length ? ` · Filtered to: ${activeCheckpoints.join(', ')}` : '';
+  document.getElementById('print-summary').textContent =
+    `Nordstrom MWFC Receiving · ${selectedFY.replace('FY20', 'FY')} · ${weekLabel}${filterLabel} · Printed ${new Date().toLocaleDateString()}`;
+}
+
+/* ============================================================
+   RENDER: DEBUG PANEL
+   ============================================================ */
+function renderDebugPanel() {
+  const el = document.getElementById('debug-log');
+  el.innerHTML = debugLog.slice(-100).map(l =>
+    `<div class="${l.level === 'error' ? 'dbg-error' : l.level === 'warn' ? 'dbg-warn' : ''}">[${l.time}] ${l.level.toUpperCase()}: ${esc(l.msg)}</div>`
+  ).join('');
+  el.scrollTop = el.scrollHeight;
+}
+function toggleDebug() {
+  debugOpen = !debugOpen;
+  document.getElementById('debug-panel').style.display = debugOpen ? 'block' : 'none';
+  if (debugOpen) renderDebugPanel();
+}
+
+/* ============================================================
+   FY / WEEK SELECTORS
+   ============================================================ */
+function populateFYSelect() {
+  const sel = document.getElementById('fy-select');
+  sel.innerHTML = FISCAL_YEARS.map(fy =>
+    `<option value="${fy}" ${fy === selectedFY ? 'selected' : ''}>${fy.replace('FY20', 'FY')}${fy === CURRENT_FY ? ' (current)' : ''}</option>`
+  ).join('');
+}
+function populateWeekSelect() {
+  const sel = document.getElementById('fw-select');
+  const weeks = getWeeksForYear(selectedFY);
+  sel.innerHTML = `<option value="all">All (${selectedFY.replace('FY20', 'FY')})</option>` +
+    weeks.map(w => `<option value="${w}" ${String(selectedWeek) === String(w) ? 'selected' : ''}>FW${w}</option>`).join('');
+  sel.value = selectedWeek;
+}
+
+function onFYChange(fy) {
+  selectedFY = fy;
+  selectedWeek = 'all';
+  activeCheckpoints = [];
+  logDebug(`Switched fiscal year to ${fy}`);
+  populateWeekSelect();
+  renderAll();
+}
+function onWeekChange(val) {
+  selectedWeek = val === 'all' ? 'all' : Number(val);
+  logDebug(`Switched week to ${val === 'all' ? `All (${selectedFY})` : `FW${val}`}`);
+  renderAll();
+}
+
+/* ============================================================
+   THEME
+   ============================================================ */
+function toggleTheme() {
+  darkMode = !darkMode;
+  document.body.classList.toggle('dark', darkMode);
+  document.getElementById('theme-btn').textContent = darkMode ? '☀️ Light' : '🌙 Dark';
+  renderChart(); // re-render for gradient/shadow color updates
+}
+
+/* ============================================================
+   MASTER RENDER
+   ============================================================ */
+function renderAll() {
+  renderContextLabel();
+  renderSubtotals();
+  renderChart();
+  renderPrintSummary();
+}
+
+/* ============================================================
+   INIT
+   ============================================================ */
+async function init() {
+  document.getElementById('loading-wrap').style.display = 'flex';
+  document.getElementById('error-wrap').style.display = 'none';
+  document.getElementById('app-content').style.display = 'none';
+  renderSkeleton();
+
+  try {
+    const url = `${REPO_RAW}/${WORKBOOK}?t=${Date.now()}`;
+    logDebug(`Fetching ${url}`);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status} — unable to fetch workbook from GitHub.`);
+    const buf = await res.arrayBuffer();
+    const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+
+    ALL_DATA = parseWorkbook(wb);
+    FISCAL_YEARS = Object.keys(ALL_DATA).sort();
+    if (!FISCAL_YEARS.length) throw new Error('No fiscal week sheets with data found in the workbook.');
+
+    // Default to today's fiscal year if present; else most recent FY with data.
+    const wantFY = `FY${currentFiscalYear()}`;
+    if (FISCAL_YEARS.includes(wantFY)) {
+      CURRENT_FY = wantFY;
+      logDebug(`Defaulting to ${wantFY} (matches today's date)`);
+    } else {
+      CURRENT_FY = FISCAL_YEARS[FISCAL_YEARS.length - 1];
+      logDebug(`Today's FY not found in workbook — defaulting to most recent ${CURRENT_FY}`, 'warn');
+    }
+    selectedFY = CURRENT_FY;
+    selectedWeek = 'all';
+
+    populateFYSelect();
+    populateWeekSelect();
+
+    document.getElementById('loading-wrap').style.display = 'none';
+    document.getElementById('app-content').style.display = 'block';
+
+    renderAll();
+    if (debugOpen) {
+      document.getElementById('debug-panel').style.display = 'block';
+      renderDebugPanel();
+    }
+  } catch (err) {
+    document.getElementById('loading-wrap').style.display = 'none';
+    document.getElementById('error-msg').textContent = err.message;
+    document.getElementById('error-wrap').style.display = 'flex';
+    logDebug(`Workbook load failed: ${err.message}`, 'error');
+  }
+}
+
+window.addEventListener('resize', () => {
+  if (document.getElementById('app-content').style.display === 'block') renderChart();
+});
+
+init();
+</script>
+</body>
+</html>
